@@ -1,0 +1,43 @@
+cone_pursuit_node:
+  ros__parameters:
+    target_speed_kph: 5.0
+    wheelbase_m: 1.2991017929
+    lookahead_base_m: 7.0
+    lookahead_gain_s: 0.0
+    lookahead_max_m: 7.0
+    max_steering_rad: 0.4363
+    steering_rate_radps: 1.0471975512
+    acceleration_mps2: 2.0
+    path_timeout_s: 0.35
+    state_timeout_s: 0.25
+    red_front_offset_m: 1.98
+    red_confirm_frames: 2
+    red_gate_match_m: 1.0
+    input_wall_timeout_s: 0.75
+    control_hz: 50.0
+    path_topic: /aeb/center_path
+    state_topic: /vehicle/state
+    command_topic: ""
+    enabled: false
+
+cone_stanley_node:
+  ros__parameters:
+    target_speed_kph: 5.0
+    wheelbase_m: 1.2991017929
+    heading_gain: 0.4
+    cross_track_gain: 0.4
+    soft_speed_mps: 2.0
+    max_steering_rad: 0.4363
+    steering_rate_radps: 1.0471975512
+    acceleration_mps2: 2.0
+    path_timeout_s: 0.35
+    state_timeout_s: 0.25
+    red_front_offset_m: 1.98
+    red_confirm_frames: 2
+    red_gate_match_m: 1.0
+    input_wall_timeout_s: 0.75
+    control_hz: 50.0
+    path_topic: /aeb/center_path
+    state_topic: /vehicle/state
+    command_topic: ""
+    enabled: false

@@ -1,0 +1,59 @@
+schema_version: 1
+course_id: kcity_2026_final
+ready: true
+
+landmarks:
+  - id: stop_line_manual_052
+    type: STOP_LINE
+    stage: F_STAGE_1
+    x: -7.699000
+    y: -20.838000
+    width_m: 6.470
+    rule_id: final_signal_1_rule
+    traffic_light_ids: [traffic_light_manual_142]
+    traffic_light_positions:
+      - {x: -5.160000, y: -14.811000, z: 4.8775}
+
+  - id: stop_line_manual_057
+    type: STOP_LINE
+    stage: F_STAGE_2
+    x: 17.871500
+    y: 28.178500
+    width_m: 6.210
+    rule_id: final_signal_2_rule
+    traffic_light_ids: [traffic_light_manual_143]
+    traffic_light_positions:
+      - {x: 19.816000, y: 34.119000, z: 4.8775}
+
+  - id: stop_line_manual_209
+    type: STOP_LINE
+    stage: F_STAGE_3
+    x: 64.655125
+    y: 154.638496
+    width_m: 11.020
+    rule_id: final_signal_3_rule
+    traffic_light_ids: [traffic_light_manual_305]
+    traffic_light_positions:
+      - {x: 66.760249, y: 159.965654, z: 4.8775}
+
+  - id: stop_line_manual_214
+    type: STOP_LINE
+    stage: F_STAGE_4
+    x: 16.881446
+    y: 172.553534
+    width_m: 6.854
+    rule_id: final_signal_4_rule
+    traffic_light_ids: [traffic_light_manual_375]
+    traffic_light_positions:
+      - {x: -6.093231, y: 173.485013, z: 4.8775}
+
+  - id: stop_line_manual_221
+    type: STOP_LINE
+    stage: F_STAGE_5
+    x: -15.937986
+    y: 81.334729
+    width_m: 3.095
+    rule_id: final_signal_5_rule
+    traffic_light_ids: [traffic_light_manual_322]
+    traffic_light_positions:
+      - {x: -18.729398, y: 76.905181, z: 4.8775}

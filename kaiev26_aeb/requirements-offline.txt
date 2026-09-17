@@ -1,0 +1,4 @@
+# The ROS node needs ultralytics and the appropriate PyTorch build on its host.
+# These two additional dependencies are only for process_bag.
+mcap==1.4.0
+mcap-ros2-support==0.5.7

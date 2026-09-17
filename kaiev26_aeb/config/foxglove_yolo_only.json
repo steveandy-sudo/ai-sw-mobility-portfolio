@@ -1,0 +1,248 @@
+{
+  "configById": {
+    "3D!aeb-yolo": {
+      "foxglovePanelTitle": "YOLO-ONLY CENTER: green / PP PREDICTED: magenta",
+      "displayFrameId": "base_link",
+      "followFrameId": "base_link",
+      "followMode": "follow-pose",
+      "cameraState": {
+        "distance": 22,
+        "perspective": false,
+        "phi": 0,
+        "target": [
+          0,
+          0,
+          0
+        ],
+        "targetOffset": [
+          8,
+          0,
+          0
+        ],
+        "targetOrientation": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "thetaOffset": 90,
+        "fovy": 45,
+        "near": 0.01,
+        "far": 5000
+      },
+      "scene": {
+        "backgroundColor": "#0b1520",
+        "transforms": {
+          "visible": false
+        }
+      },
+      "transforms": {},
+      "topics": {
+        "/aeb/cones": {
+          "visible": true
+        },
+        "/aeb/boundaries": {
+          "visible": true
+        },
+        "/aeb/pursuit_target": {
+          "visible": true
+        },
+        "/aeb/predicted_path": {
+          "visible": true
+        },
+        "/aeb/center_path": {
+          "visible": false
+        }
+      },
+      "layers": {
+        "aeb-yolo-grid": {
+          "layerId": "foxglove.Grid",
+          "instanceId": "aeb-yolo-grid",
+          "visible": true,
+          "frameLocked": true,
+          "label": "1 m grid",
+          "size": 40,
+          "divisions": 40,
+          "lineWidth": 1,
+          "color": "#324355",
+          "position": [
+            0,
+            0,
+            -0.3
+          ],
+          "rotation": [
+            0,
+            0,
+            0
+          ],
+          "order": 1
+        }
+      },
+      "publish": {
+        "type": "point",
+        "poseTopic": "/move_base_simple/goal",
+        "pointTopic": "/clicked_point",
+        "poseEstimateTopic": "/initialpose",
+        "poseEstimateXDeviation": 0.5,
+        "poseEstimateYDeviation": 0.5,
+        "poseEstimateThetaDeviation": 0.26179939
+      },
+      "synchronize": false,
+      "imageMode": {}
+    },
+    "Image!left-yolo": {
+      "foxglovePanelTitle": "LEFT: YOLO bbox → ground",
+      "imageMode": {
+        "imageTopic": "/aeb/left/image/compressed"
+      },
+      "synchronize": false,
+      "cameraState": {
+        "distance": 20,
+        "perspective": true,
+        "phi": 60,
+        "target": [
+          0,
+          0,
+          0
+        ],
+        "targetOffset": [
+          0,
+          0,
+          0
+        ],
+        "targetOrientation": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "thetaOffset": 60,
+        "fovy": 45,
+        "near": 0.5,
+        "far": 5000
+      },
+      "followMode": "follow-pose",
+      "scene": {},
+      "transforms": {},
+      "topics": {},
+      "layers": {},
+      "publish": {
+        "type": "point",
+        "poseTopic": "/move_base_simple/goal",
+        "pointTopic": "/clicked_point",
+        "poseEstimateTopic": "/initialpose",
+        "poseEstimateXDeviation": 0.5,
+        "poseEstimateYDeviation": 0.5,
+        "poseEstimateThetaDeviation": 0.26179939
+      }
+    },
+    "Image!right-yolo": {
+      "foxglovePanelTitle": "RIGHT: YOLO bbox → ground",
+      "imageMode": {
+        "imageTopic": "/aeb/right/image/compressed"
+      },
+      "synchronize": false,
+      "cameraState": {
+        "distance": 20,
+        "perspective": true,
+        "phi": 60,
+        "target": [
+          0,
+          0,
+          0
+        ],
+        "targetOffset": [
+          0,
+          0,
+          0
+        ],
+        "targetOrientation": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "thetaOffset": 60,
+        "fovy": 45,
+        "near": 0.5,
+        "far": 5000
+      },
+      "followMode": "follow-pose",
+      "scene": {},
+      "transforms": {},
+      "topics": {},
+      "layers": {},
+      "publish": {
+        "type": "point",
+        "poseTopic": "/move_base_simple/goal",
+        "pointTopic": "/clicked_point",
+        "poseEstimateTopic": "/initialpose",
+        "poseEstimateXDeviation": 0.5,
+        "poseEstimateYDeviation": 0.5,
+        "poseEstimateThetaDeviation": 0.26179939
+      }
+    },
+    "RawMessages!aeb-yolo": {
+      "foxglovePanelTitle": "YOLO-ONLY PATH STATUS",
+      "topicPath": "/aeb/status",
+      "defaultExpanded": false
+    },
+    "RawMessages!tracking-yolo": {
+      "foxglovePanelTitle": "PURE PURSUIT: lookahead / speed / red stop",
+      "topicPath": "/aeb/tracking_status",
+      "defaultExpanded": false
+    },
+    "Plot!speed-yolo": {
+      "foxglovePanelTitle": "SPEED: target / measured (m/s; 9.72 = 35 km/h)",
+      "paths": [
+        {
+          "value": "/aeb/control_command.speed_target_mps",
+          "enabled": true,
+          "timestampMethod": "receiveTime",
+          "color": "#00cc88",
+          "label": "target"
+        },
+        {
+          "value": "/vehicle/state.speed_mps",
+          "enabled": true,
+          "timestampMethod": "receiveTime",
+          "color": "#3388ff",
+          "label": "measured"
+        }
+      ],
+      "xAxisVal": "timestamp",
+      "showLegend": true
+    }
+  },
+  "layout": {
+    "direction": "column",
+    "splitPercentage": 75,
+    "first": {
+      "direction": "row",
+      "splitPercentage": 55,
+      "first": "3D!aeb-yolo",
+      "second": {
+        "direction": "column",
+        "splitPercentage": 75,
+        "first": {
+          "direction": "row",
+          "splitPercentage": 50,
+          "first": "Image!left-yolo",
+          "second": "Image!right-yolo"
+        },
+        "second": "RawMessages!aeb-yolo"
+      }
+    },
+    "second": {
+      "direction": "row",
+      "splitPercentage": 55,
+      "first": "Plot!speed-yolo",
+      "second": "RawMessages!tracking-yolo"
+    }
+  },
+  "globalVariables": {},
+  "userNodes": {},
+  "playbackConfig": {
+    "speed": 1
+  }
+}

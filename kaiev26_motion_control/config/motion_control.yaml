@@ -1,0 +1,82 @@
+# 판단 소유 경로추종·속도계획과 최종 차량 명령 파라미터.
+kaiev26_motion_control:
+  ros__parameters:
+    use_sim_time: true
+    command_topic: /planning/command
+    control_rate_hz: 50.0
+    target_stale_sec: 0.35
+    # geometry SSOT: kaiev26_description의 wheelbase 설계값
+    wheelbase_m: 1.2991017929
+    max_steering_rad: 0.4363
+    # 실차 lateral_ctrl의 60 deg/s software 상한
+    steering_rate_limit_radps: 1.0471975512
+    # 실제 조향속도는 제어 제한 없이 진단값으로만 사용한다.
+    steering_rate_filter_time_constant_s: 0.15
+    steering_rate_estimate_limit_radps: 2.0943951024      # 120 deg/s
+    straight_corridor_enabled: true
+    straight_corridor_preview_time_s: 1.2
+    straight_corridor_preview_min_m: 4.0
+    straight_corridor_preview_max_m: 9.0
+    straight_corridor_deadband_m: 0.08
+    straight_corridor_full_m: 0.25
+    straight_heading_deadband_rad: 0.0139626340          # 0.8 deg
+    straight_heading_full_rad: 0.0349065850              # 2.0 deg
+    # pure_pursuit, stanley, pp_stanley, ff_stanley 중 하나를 선택한다.
+    lateral_controller: pure_pursuit
+    # 09-05 K-City 수동 기록과 09-11 예선 Case 2 Gazebo 3.2/5.0/6.0 m/s 검증값.
+    adaptive_lookahead_enabled: true
+    lookahead_base_m: 4.0
+    lookahead_gain_s: 0.9
+    lookahead_min_m: 3.6
+    lookahead_max_m: 9.5
+    lookahead_curve_start_1pm: 0.015
+    lookahead_curve_exit_1pm: 0.010
+    lookahead_curve_full_1pm: 0.070
+    lookahead_curve_speed_gain_s: 0.30
+    lookahead_curve_minimum_samples: 3
+    lookahead_near_window_m: 4.0
+    lookahead_preview_distance_m: 12.0
+    lookahead_shorten_rate_mps: 8.0
+    lookahead_lengthen_rate_mps: 8.0
+    # Stanley는 위 PP 곡률 구간을 공유하고 직선/코너 값을 연속 보간한다.
+    stanley_heading_gain: 0.30
+    stanley_curve_heading_gain: 0.45
+    stanley_cross_track_gain: 0.25
+    stanley_curve_cross_track_gain: 0.35
+    stanley_softening_speed_mps: 3.0
+    stanley_cross_track_correction_limit_rad: 0.05
+    stanley_curve_cross_track_correction_limit_rad: 0.07
+    stanley_heading_correction_limit_rad: 0.10
+    stanley_curve_heading_correction_limit_rad: 0.16
+    stanley_heading_window_m: 8.0
+    stanley_curve_heading_window_m: 6.0
+    # 코너 형상을 조금 앞에서 반영하되 실제 조향 피드백으로 목표를 예측하지 않는다.
+    stanley_curve_preview_time_s: 0.18
+    stanley_curve_preview_max_m: 3.5
+    # Feedforward + Stanley: 경로 곡률에서 기본 조향을 만들고 Stanley는 작은 오차 보정만 담당한다.
+    ff_stanley_feedback_scale: 0.50
+    ff_curvature_gain: 1.0
+    ff_preview_time_s: 0.20
+    ff_preview_min_m: 2.0
+    ff_preview_max_m: 4.0
+    ff_curvature_sample_half_width_m: 2.0
+    ff_curvature_limit_1pm: 0.20
+    ff_steering_limit_rad: 0.30
+    # Hybrid는 전역경로 형상 phase마다 고정 PP 비율을 선택하고 짧게 전환한다.
+    hybrid_pp_straight_weight: 0.0
+    hybrid_pp_approach_weight: 0.65
+    hybrid_pp_turning_weight: 0.35
+    hybrid_pp_exit_weight: 0.10
+    hybrid_blend_rate_per_s: 6.0
+    # 순항속도는 직선에서 유지하고, 전방 곡률 강도에 따라 코너에서 이 값까지 낮춘다.
+    curvature_speed_planning_enabled: true
+    curvature_speed_min_mps: 3.2
+    max_accel_mps2: 1.0
+    signal_release_accel_mps2: 2.0
+    signal_release_boost_speed_mps: 3.8
+    max_decel_mps2: 2.0
+    planned_stop_brake_distance_m: 2.0
+    stop_speed_epsilon_mps: 0.05
+    stopped_steering_hold_speed_mps: 0.10
+    planned_stop_steering_align_distance_m: 2.0
+    stop_release_steering_resume_speed_mps: 0.30

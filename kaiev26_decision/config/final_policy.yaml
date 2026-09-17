@@ -1,0 +1,89 @@
+schema_version: 1
+course_id: kcity_2026_final
+ready: true
+source:
+  map: square_intersection_gazebo_map
+  route: kcity_final_route.yaml
+
+stages:
+  - id: F_STAGE_1
+    traffic_light_enabled: true
+    obstacle_enabled: false
+    boundary_stop_line_id: stop_line_manual_052
+    event:
+      id: Z1_SIGNAL_OBEY
+      type: SIGNAL_OBEY
+      stop_line_id: stop_line_manual_052
+      brake_trigger_waypoint: 98
+      brake_trigger_route_s: 97.984659
+      traffic_light_ids: [traffic_light_manual_142]
+      arrow_maneuver: NONE
+      approach_distance_m: 30.0
+      commit_distance_m: 6.0
+
+  - id: F_STAGE_2
+    traffic_light_enabled: true
+    obstacle_enabled: false
+    boundary_stop_line_id: stop_line_manual_057
+    event:
+      id: Z2_SIGNAL_OBEY
+      type: SIGNAL_OBEY
+      stop_line_id: stop_line_manual_057
+      brake_trigger_waypoint: 153
+      brake_trigger_route_s: 152.983564
+      traffic_light_ids: [traffic_light_manual_143]
+      arrow_maneuver: NONE
+      approach_distance_m: 30.0
+      commit_distance_m: 6.0
+
+  - id: F_STAGE_3
+    traffic_light_enabled: true
+    obstacle_enabled: false
+    boundary_stop_line_id: stop_line_manual_209
+    event:
+      id: Z3_SIGNAL_OBEY
+      type: SIGNAL_OBEY
+      stop_line_id: stop_line_manual_209
+      brake_trigger_waypoint: 289
+      brake_trigger_route_s: 288.980038
+      traffic_light_ids: [traffic_light_manual_305]
+      arrow_maneuver: LEFT
+      approach_distance_m: 30.0
+      commit_distance_m: 6.0
+
+  - id: F_STAGE_4
+    traffic_light_enabled: true
+    obstacle_enabled: false
+    boundary_stop_line_id: stop_line_manual_214
+    event:
+      id: Z4_SIGNAL_OBEY
+      type: SIGNAL_OBEY
+      stop_line_id: stop_line_manual_214
+      brake_trigger_waypoint: 346
+      brake_trigger_route_s: 345.973057
+      traffic_light_ids: [traffic_light_manual_375]
+      arrow_maneuver: LEFT
+      approach_distance_m: 30.0
+      commit_distance_m: 6.0
+
+  - id: F_STAGE_5
+    traffic_light_enabled: true
+    obstacle_enabled: false
+    boundary_stop_line_id: stop_line_manual_221
+    event:
+      id: Z5_SIGNAL_OBEY
+      type: SIGNAL_OBEY
+      stop_line_id: stop_line_manual_221
+      brake_trigger_waypoint: 448
+      brake_trigger_route_s: 447.963912
+      traffic_light_ids: [traffic_light_manual_322]
+      arrow_maneuver: NONE
+      approach_distance_m: 30.0
+      commit_distance_m: 6.0
+
+  - id: F_STAGE_6
+    traffic_light_enabled: false
+    obstacle_enabled: true
+    event:
+      id: Z6_FINISH
+      type: FINISH

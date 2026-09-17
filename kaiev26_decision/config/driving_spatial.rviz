@@ -1,0 +1,235 @@
+Panels:
+  - Class: rviz_common/Displays
+    Help Height: 70
+    Name: Displays
+    Property Tree Widget:
+      Expanded: ~
+      Splitter Ratio: 0.5
+    Tree Height: 720
+  - Class: rviz_common/Views
+    Expanded:
+      - /Current View1
+    Name: Views
+    Splitter Ratio: 0.5
+  - Class: rviz_common/Time
+    Experimental: false
+    Name: Time
+    SyncMode: 0
+    SyncSource: ""
+Visualization Manager:
+  Class: ""
+  Displays:
+    - Alpha: 0.32
+      Cell Size: 5
+      Class: rviz_default_plugins/Grid
+      Color: 86; 92; 99
+      Enabled: true
+      Line Style:
+        Line Width: 0.03
+        Value: Lines
+      Name: Grid
+      Normal Cell Count: 0
+      Offset:
+        X: 0
+        Y: 0
+        Z: -0.04
+      Plane: XY
+      Plane Cell Count: 50
+      Reference Frame: <Fixed Frame>
+      Value: true
+    - Class: rviz_default_plugins/TF
+      Enabled: false
+      Frame Timeout: 15
+      Frames:
+        All Enabled: false
+        base_footprint:
+          Value: true
+        base_link:
+          Value: true
+        map:
+          Value: true
+        odom:
+          Value: true
+      Marker Scale: 0.25
+      Name: TF
+      Show Arrows: true
+      Show Axes: true
+      Show Names: false
+      Update Interval: 0
+      Value: false
+    - Class: rviz_default_plugins/MarkerArray
+      Enabled: true
+      Name: Vehicle
+      Namespaces:
+        vehicle_mesh: true
+      Topic:
+        Depth: 5
+        Durability Policy: Transient Local
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /vehicle/mesh_marker
+      Value: true
+    - Class: rviz_default_plugins/MarkerArray
+      Enabled: true
+      Name: HD Map
+      Namespaces:
+        hdmap_crosswalks: true
+        hdmap_feature_labels: false
+        hdmap_ground: false
+        hdmap_lane_white_edge: true
+        hdmap_lane_white_guide: true
+        hdmap_lane_yellow: true
+        hdmap_lanelet_areas: true
+        hdmap_lanelet_boundaries: true
+        hdmap_lanelet_directions: false
+        hdmap_lanelet_labels: false
+        hdmap_objects: true
+        hdmap_road_asphalt: true
+        hdmap_road_symbols: true
+        hdmap_school_zone: true
+        hdmap_stop_lines: true
+        hdmap_traffic_light_facing: true
+        hdmap_traffic_lights: true
+      Topic:
+        Depth: 5
+        Durability Policy: Transient Local
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /map/gazebo_semantic_markers
+      Value: true
+    - Class: rviz_default_plugins/MarkerArray
+      Enabled: true
+      Name: Perception Results
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /perception/ground_truth/debug_markers
+      Value: true
+    - Class: rviz_default_plugins/MarkerArray
+      Enabled: true
+      Name: Global Route and Waypoints
+      Namespaces:
+        global_route_distance_labels: true
+        global_route_distance_ticks: true
+        global_route_endpoint_labels: true
+        global_route_endpoints: true
+        global_route_line: true
+        global_route_stopline_labels: true
+        global_route_stoplines: true
+        global_route_underlay: true
+        global_route_waypoints: false
+        route_zone_labels: true
+        route_zone_f_stage_1: true
+        route_zone_f_stage_2: true
+        route_zone_f_stage_3: true
+        route_zone_f_stage_4: true
+        route_zone_f_stage_5: true
+        route_zone_f_stage_6: true
+        route_zone_intersection_zone: true
+        route_zone_q_stage_1: true
+        route_zone_q_stage_2: true
+        route_zone_q_stage_3: true
+        route_zone_q_stage_4: true
+        route_zone_q_stage_5: true
+      Topic:
+        Depth: 5
+        Durability Policy: Transient Local
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /debug/global_route_markers
+      Value: true
+    - Class: rviz_default_plugins/MarkerArray
+      Enabled: true
+      Name: Route State
+      Namespaces:
+        global_route_progress: true
+        global_route_projection: true
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /debug/route_state_markers
+      Value: true
+    - Class: rviz_default_plugins/MarkerArray
+      Enabled: true
+      Name: Local and Target Paths
+      Namespaces:
+        actual_vehicle_trajectory: true
+        autonomous_status: false
+        front_obstacle: true
+        route_local_path: true
+        stopline: true
+        steering_comparison: true
+        target_command_trajectory: true
+        target_path: true
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /debug/autonomous_markers
+      Value: true
+    - Class: rviz_default_plugins/Marker
+      Enabled: false
+      Name: Satellite Overlay
+      Topic:
+        Depth: 1
+        Durability Policy: Transient Local
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /map/satellite_overlay_marker
+      Value: false
+  Enabled: true
+  Global Options:
+    Background Color: 18; 20; 24
+    Fixed Frame: map
+    Frame Rate: 30
+  Name: root
+  Tools:
+    - Class: rviz_default_plugins/Interact
+      Hide Inactive Objects: true
+    - Class: rviz_default_plugins/MoveCamera
+    - Class: rviz_default_plugins/Select
+    - Class: rviz_default_plugins/FocusCamera
+    - Class: rviz_default_plugins/Measure
+  Transformation:
+    Current:
+      Class: rviz_default_plugins/TF
+  Value: true
+  Views:
+    Current:
+      Class: rviz_default_plugins/Orbit
+      Distance: 28
+      Enable Stereo Rendering:
+        Stereo Eye Separation: 0.06
+        Stereo Focal Distance: 1
+        Swap Stereo Eyes: false
+        Value: false
+      Focal Point:
+        X: 0
+        Y: 0
+        Z: 0
+      Focal Shape Fixed Size: true
+      Focal Shape Size: 0.05
+      Invert Z Axis: false
+      Name: Vehicle Follow
+      Near Clip Distance: 0.01
+      Pitch: 0.82
+      Target Frame: base_footprint
+      Value: Orbit (rviz_default_plugins)
+      Yaw: 4.71
+    Saved: ~
+Window Geometry:
+  Displays:
+    collapsed: false
+  Height: 980
+  Hide Left Dock: false
+  Hide Right Dock: false
+  Views:
+    collapsed: false
+  Width: 1480
+  X: 40
+  Y: 30

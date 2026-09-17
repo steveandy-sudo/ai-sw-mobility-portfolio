@@ -1,0 +1,72 @@
+schema_version: 1
+course_id: kcity_2026_qualifying
+ready: true
+source:
+  map: square_intersection_gazebo_map
+  route: kcity_quali_route.yaml
+
+stages:
+  - id: Q_STAGE_1
+    traffic_light_enabled: false
+    obstacle_enabled: false
+    boundary_stop_line_id: stop_line_manual_264
+    event:
+      id: Z1_TIMED_STOP
+      type: TIMED_STOP
+      stop_line_id: stop_line_manual_264
+      brake_trigger_waypoint: 203
+      brake_trigger_route_s: 202.966612
+      approach_distance_m: 30.0
+      hold_sec: 3.0
+
+  - id: Q_STAGE_2
+    traffic_light_enabled: true
+    obstacle_enabled: false
+    boundary_stop_line_id: stop_line_manual_058
+    event:
+      id: Z2_SIGNAL_OBEY
+      type: SIGNAL_OBEY
+      stop_line_id: stop_line_manual_058
+      brake_trigger_waypoint: 244
+      brake_trigger_route_s: 243.954400
+      traffic_light_ids:
+        - traffic_light_manual_318
+      arrow_maneuver: NONE
+      approach_distance_m: 30.0
+      commit_distance_m: 6.0
+
+  - id: Q_STAGE_3
+    traffic_light_enabled: false
+    obstacle_enabled: false
+    boundary_stop_line_id: stop_line_manual_341
+    event:
+      id: Z3_TIMED_STOP
+      type: TIMED_STOP
+      stop_line_id: stop_line_manual_341
+      brake_trigger_waypoint: 296
+      brake_trigger_route_s: 295.951674
+      approach_distance_m: 30.0
+      hold_sec: 3.0
+
+  - id: Q_STAGE_4
+    traffic_light_enabled: true
+    obstacle_enabled: false
+    boundary_stop_line_id: stop_line_manual_048
+    event:
+      id: Z4_SIGNAL_OBEY
+      type: SIGNAL_OBEY
+      stop_line_id: stop_line_manual_048
+      brake_trigger_waypoint: 337
+      brake_trigger_route_s: 336.942051
+      traffic_light_ids:
+        - traffic_light_manual_144
+      arrow_maneuver: NONE
+      approach_distance_m: 30.0
+      commit_distance_m: 6.0
+
+  - id: Q_STAGE_5
+    traffic_light_enabled: false
+    obstacle_enabled: false
+    event:
+      id: Z5_FINISH
+      type: FINISH

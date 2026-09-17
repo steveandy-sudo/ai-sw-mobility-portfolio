@@ -1,0 +1,48 @@
+schema_version: 1
+course_id: kcity_2026_qualifying
+ready: true
+
+landmarks:
+  - id: stop_line_manual_264
+    type: STOP_LINE
+    stage: Q_STAGE_1
+    target_waypoint_index: 203
+    x: -29.278417477223734
+    y: 49.32883190707003
+    width_m: 3.505
+
+  - id: stop_line_manual_058
+    type: STOP_LINE
+    stage: Q_STAGE_2
+    x: 6.308500
+    y: 49.597000
+    width_m: 3.543
+    rule_id: qualifying_signal_rule
+    traffic_light_ids:
+      - traffic_light_manual_318
+    traffic_light_positions:
+      - x: 9.935762
+        y: 47.628658
+        z: 4.8775
+
+  - id: stop_line_manual_341
+    type: STOP_LINE
+    stage: Q_STAGE_3
+    target_waypoint_index: 296
+    x: 49.13551694411293
+    y: 27.265170023349786
+    width_m: 3.136
+
+  - id: stop_line_manual_048
+    type: STOP_LINE
+    stage: Q_STAGE_4
+    x: 48.605000
+    y: -9.323000
+    width_m: 3.496
+    rule_id: traffic_light_rule_remote_east
+    traffic_light_ids:
+      - traffic_light_manual_144
+    traffic_light_positions:
+      - x: 45.390000
+        y: -16.004000
+        z: 4.8775

@@ -1,0 +1,25 @@
+# ROS 2 / colcon 생성물
+build/
+install/
+log/
+
+# Python 생성물
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# 편집기와 로컬 환경
+.vscode/
+.idea/
+*.swp
+*~
+.envrc
+.venv/
+venv/
+
+# 주행 기록과 대용량 데이터
+*.bag
+*.db3
+*.mcap
+kaiev26_decision/waypoints/*/

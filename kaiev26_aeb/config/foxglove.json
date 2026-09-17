@@ -1,0 +1,257 @@
+{
+  "configById": {
+    "3D!aeb": {
+      "foxglovePanelTitle": "CENTER: green / PP PREDICTED: magenta",
+      "displayFrameId": "base_link",
+      "followFrameId": "base_link",
+      "followMode": "follow-pose",
+      "cameraState": {
+        "perspective": false,
+        "distance": 14.373578331824607,
+        "phi": 5.729577951308232e-05,
+        "thetaOffset": -176.071428574099,
+        "targetOffset": [
+          4.07697921382431,
+          -2.7147400943350597,
+          -6.727836879568961e-24
+        ],
+        "target": [
+          0,
+          0,
+          0
+        ],
+        "targetOrientation": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "fovy": 45,
+        "near": 0.01,
+        "far": 5000
+      },
+      "scene": {
+        "backgroundColor": "#0b1520",
+        "transforms": {
+          "visible": false
+        }
+      },
+      "transforms": {},
+      "topics": {
+        "/aeb/points": {
+          "visible": true,
+          "pointSize": 2,
+          "colorMode": "colormap",
+          "flatColor": "#82939f88",
+          "decayTime": 0,
+          "colorField": "z",
+          "colorMap": "turbo"
+        },
+        "/aeb/cones": {
+          "visible": true
+        },
+        "/aeb/boundaries": {
+          "visible": true
+        },
+        "/aeb/pursuit_target": {
+          "visible": true
+        },
+        "/aeb/predicted_path": {
+          "visible": true
+        },
+        "/aeb/center_path": {
+          "visible": false
+        }
+      },
+      "layers": {
+        "aeb-grid": {
+          "layerId": "foxglove.Grid",
+          "instanceId": "aeb-grid",
+          "visible": true,
+          "frameLocked": true,
+          "label": "1 m grid",
+          "size": 50,
+          "divisions": 50,
+          "lineWidth": 1,
+          "color": "#324355",
+          "position": [
+            0,
+            0,
+            -0.3
+          ],
+          "rotation": [
+            0,
+            0,
+            0
+          ],
+          "order": 1
+        }
+      },
+      "publish": {
+        "type": "point",
+        "poseTopic": "/move_base_simple/goal",
+        "pointTopic": "/clicked_point",
+        "poseEstimateTopic": "/initialpose",
+        "poseEstimateXDeviation": 0.5,
+        "poseEstimateYDeviation": 0.5,
+        "poseEstimateThetaDeviation": 0.26179939
+      },
+      "synchronize": false,
+      "imageMode": {}
+    },
+    "Image!left": {
+      "foxglovePanelTitle": "LEFT: YOLO + LiDAR",
+      "imageMode": {
+        "imageTopic": "/aeb/left/image/compressed"
+      },
+      "synchronize": false,
+      "cameraState": {
+        "distance": 20,
+        "perspective": true,
+        "phi": 60,
+        "target": [
+          0,
+          0,
+          0
+        ],
+        "targetOffset": [
+          0,
+          0,
+          0
+        ],
+        "targetOrientation": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "thetaOffset": 60,
+        "fovy": 45,
+        "near": 0.5,
+        "far": 5000
+      },
+      "followMode": "follow-pose",
+      "scene": {},
+      "transforms": {},
+      "topics": {},
+      "layers": {},
+      "publish": {
+        "type": "point",
+        "poseTopic": "/move_base_simple/goal",
+        "pointTopic": "/clicked_point",
+        "poseEstimateTopic": "/initialpose",
+        "poseEstimateXDeviation": 0.5,
+        "poseEstimateYDeviation": 0.5,
+        "poseEstimateThetaDeviation": 0.26179939
+      }
+    },
+    "Image!right": {
+      "foxglovePanelTitle": "RIGHT: YOLO + LiDAR",
+      "imageMode": {
+        "imageTopic": "/aeb/right/image/compressed"
+      },
+      "synchronize": false,
+      "cameraState": {
+        "distance": 20,
+        "perspective": true,
+        "phi": 60,
+        "target": [
+          0,
+          0,
+          0
+        ],
+        "targetOffset": [
+          0,
+          0,
+          0
+        ],
+        "targetOrientation": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "thetaOffset": 60,
+        "fovy": 45,
+        "near": 0.5,
+        "far": 5000
+      },
+      "followMode": "follow-pose",
+      "scene": {},
+      "transforms": {},
+      "topics": {},
+      "layers": {},
+      "publish": {
+        "type": "point",
+        "poseTopic": "/move_base_simple/goal",
+        "pointTopic": "/clicked_point",
+        "poseEstimateTopic": "/initialpose",
+        "poseEstimateXDeviation": 0.5,
+        "poseEstimateYDeviation": 0.5,
+        "poseEstimateThetaDeviation": 0.26179939
+      }
+    },
+    "RawMessages!aeb": {
+      "foxglovePanelTitle": "PATH STATUS",
+      "topicPath": "/aeb/status",
+      "defaultExpanded": false
+    },
+    "Plot!speed": {
+      "foxglovePanelTitle": "SPEED: target / measured (m/s; 8.33 = 30 km/h)",
+      "paths": [
+        {
+          "value": "/aeb/control_command.speed_target_mps",
+          "enabled": true,
+          "timestampMethod": "receiveTime",
+          "color": "#00cc88",
+          "label": "target"
+        },
+        {
+          "value": "/vehicle/state.speed_mps",
+          "enabled": true,
+          "timestampMethod": "receiveTime",
+          "color": "#3388ff",
+          "label": "measured"
+        }
+      ],
+      "xAxisVal": "timestamp",
+      "showLegend": true
+    },
+    "RawMessages!tracking": {
+      "foxglovePanelTitle": "PURE PURSUIT: lookahead / speed / state",
+      "topicPath": "/aeb/tracking_status",
+      "defaultExpanded": false
+    }
+  },
+  "layout": {
+    "direction": "column",
+    "splitPercentage": 75,
+    "first": {
+      "direction": "row",
+      "splitPercentage": 55,
+      "first": "3D!aeb",
+      "second": {
+        "direction": "column",
+        "splitPercentage": 75,
+        "first": {
+          "direction": "row",
+          "splitPercentage": 50,
+          "first": "Image!left",
+          "second": "Image!right"
+        },
+        "second": "RawMessages!aeb"
+      }
+    },
+    "second": {
+      "direction": "row",
+      "splitPercentage": 55,
+      "first": "Plot!speed",
+      "second": "RawMessages!tracking"
+    }
+  },
+  "globalVariables": {},
+  "userNodes": {},
+  "playbackConfig": {
+    "speed": 1
+  }
+}

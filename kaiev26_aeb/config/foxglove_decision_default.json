@@ -1,0 +1,221 @@
+{
+  "configById": {
+    "Image!11c3msc": {
+      "imageMode": {
+        "imageTopic": "/perception/camera/left/source/image_raw/compressed"
+      },
+      "cameraState": {
+        "distance": 20,
+        "perspective": true,
+        "phi": 60,
+        "target": [
+          0,
+          0,
+          0
+        ],
+        "targetOffset": [
+          0,
+          0,
+          0
+        ],
+        "targetOrientation": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "thetaOffset": 60,
+        "fovy": 45,
+        "near": 0.5,
+        "far": 5000
+      },
+      "followMode": "follow-pose",
+      "scene": {},
+      "transforms": {},
+      "topics": {},
+      "layers": {},
+      "publish": {
+        "type": "point",
+        "poseTopic": "/move_base_simple/goal",
+        "pointTopic": "/clicked_point",
+        "poseEstimateTopic": "/initialpose",
+        "poseEstimateXDeviation": 0.5,
+        "poseEstimateYDeviation": 0.5,
+        "poseEstimateThetaDeviation": 0.26179939
+      },
+      "synchronize": false
+    },
+    "Image!43fwiwd": {
+      "imageMode": {
+        "imageTopic": "/perception/camera/right/source/image_raw/compressed"
+      },
+      "cameraState": {
+        "distance": 20,
+        "perspective": true,
+        "phi": 60,
+        "target": [
+          0,
+          0,
+          0
+        ],
+        "targetOffset": [
+          0,
+          0,
+          0
+        ],
+        "targetOrientation": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "thetaOffset": 60,
+        "fovy": 45,
+        "near": 0.5,
+        "far": 5000
+      },
+      "followMode": "follow-pose",
+      "scene": {},
+      "transforms": {},
+      "topics": {},
+      "layers": {},
+      "publish": {
+        "type": "point",
+        "poseTopic": "/move_base_simple/goal",
+        "pointTopic": "/clicked_point",
+        "poseEstimateTopic": "/initialpose",
+        "poseEstimateXDeviation": 0.5,
+        "poseEstimateYDeviation": 0.5,
+        "poseEstimateThetaDeviation": 0.26179939
+      },
+      "synchronize": false
+    },
+    "3D!20opj9x": {
+      "topics": {},
+      "layers": {
+        "b2706539-f28d-4612-95d8-812509cd1821": {
+          "layerId": "foxglove.Grid",
+          "instanceId": "b2706539-f28d-4612-95d8-812509cd1821"
+        }
+      },
+      "cameraState": {
+        "distance": 7.547072050705451,
+        "perspective": true,
+        "phi": 60.0000000000026,
+        "target": [
+          0,
+          0,
+          0
+        ],
+        "targetOffset": [
+          1.2325578235272145,
+          2.1085130314571656,
+          -1.9234934964783516e-16
+        ],
+        "targetOrientation": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "thetaOffset": 60.00000000000515,
+        "fovy": 45,
+        "near": 0.5,
+        "far": 5000
+      },
+      "followMode": "follow-pose",
+      "scene": {},
+      "transforms": {},
+      "publish": {
+        "type": "point",
+        "poseTopic": "/move_base_simple/goal",
+        "pointTopic": "/clicked_point",
+        "poseEstimateTopic": "/initialpose",
+        "poseEstimateXDeviation": 0.5,
+        "poseEstimateYDeviation": 0.5,
+        "poseEstimateThetaDeviation": 0.26179939
+      },
+      "synchronize": false,
+      "imageMode": {}
+    },
+    "Plot!16j307d": {
+      "paths": [
+        {
+          "value": "/steering/angle.data",
+          "enabled": true,
+          "color": "#4e98e2",
+          "id": "e547681e-732c-45d1-b828-028a12b7c144"
+        }
+      ],
+      "showLegend": false,
+      "foxglovePanelTitle": "/steering/angle"
+    },
+    "map!2r0s0co": {
+      "topic": "/gnss/fix",
+      "zoomLevel": 15
+    },
+    "DiagnosticSummary!pz2wft": {
+      "topicToRender": "/diagnostics",
+      "minLevel": 0,
+      "pinnedIds": [],
+      "hardwareIdFilter": "",
+      "sortByLevel": true,
+      "secondsUntilStale": 5
+    },
+    "RawMessages!3jl6bw5": {
+      "topicPath": "/tf_static",
+      "expansion": "none",
+      "defaultExpanded": false
+    },
+    "kaiev26-decision-fox.KAIEV26 Decision Monitor!zrawey": {},
+    "Tab!2kh2x24": {
+      "activeTabIdx": 0,
+      "tabs": [
+        {
+          "title": "Overview",
+          "layout": {
+            "direction": "column",
+            "first": {
+              "first": "Image!11c3msc",
+              "second": "Image!43fwiwd",
+              "direction": "row"
+            },
+            "second": {
+              "direction": "column",
+              "first": {
+                "direction": "row",
+                "first": "3D!20opj9x",
+                "second": "Plot!16j307d",
+                "splitPercentage": 60
+              },
+              "second": {
+                "direction": "row",
+                "first": "map!2r0s0co",
+                "second": {
+                  "direction": "row",
+                  "first": "DiagnosticSummary!pz2wft",
+                  "second": "RawMessages!3jl6bw5",
+                  "splitPercentage": 50
+                },
+                "splitPercentage": 33.333333333333336
+              },
+              "splitPercentage": 57.14285714285714
+            },
+            "splitPercentage": 28.57142857142857
+          }
+        }
+      ]
+    }
+  },
+  "layout": {
+    "direction": "row",
+    "first": "kaiev26-decision-fox.KAIEV26 Decision Monitor!zrawey",
+    "second": "Tab!2kh2x24",
+    "splitPercentage": 49.34402332361516
+  },
+  "globalVariables": {},
+  "playbackConfig": {
+    "speed": 1
+  },
+  "userNodes": {}
+}

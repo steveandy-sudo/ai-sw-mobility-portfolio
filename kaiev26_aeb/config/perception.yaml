@@ -1,0 +1,77 @@
+cone_path_node:
+  ros__parameters:
+    model_path: ""
+    device: auto
+    image_size: 800
+    confidence: 0.5
+    output_frame: base_link
+    points_topic: /ouster/points
+    left_image_topic: /perception/camera/left/source/image_raw/compressed
+    right_image_topic: /perception/camera/right/source/image_raw/compressed
+    left_info_topic: /perception/camera/left/source/camera_info
+    right_info_topic: /perception/camera/right/source/camera_info
+    processing_hz: 10.0
+    max_camera_dt_s: 0.05
+    # Ouster scan-start stamp compensation. Gazebo launch overrides this to 0.0.
+    cloud_time_offset_s: 0.025
+    stale_timeout_s: 0.5
+    publish_debug: true
+    roi_x_min: 0.5
+    roi_x_max: 25.0
+    roi_y_abs: 7.0
+    ground_z: -0.2408
+    ground_search_half_height: 0.6
+    ground_threshold: 0.08
+    ground_min_fraction: 0.45
+    cluster_radius: 0.25
+    cluster_min_points: 3
+    cone_min_height: 0.22
+    cone_max_height: 0.95
+    cone_max_width: 0.7
+    boundary_min_cones: 2
+    boundary_min_span: 2.5
+    boundary_residual: 0.3
+    boundary_max_heading_deg: 30.0
+    boundary_max_difference_deg: 10.0
+    corridor_width_min: 1.0
+    corridor_width_max: 6.5
+    path_max_forward: 20.0
+    path_min_forward: 4.0
+    path_step: 0.25
+    red_gate_max_stagger_m: 2.0
+
+cone_yolo_path_node:
+  ros__parameters:
+    model_path: ""
+    device: auto
+    image_size: 800
+    confidence: 0.5
+    output_frame: base_link
+    left_image_topic: /perception/camera/left/source/image_raw/compressed
+    right_image_topic: /perception/camera/right/source/image_raw/compressed
+    left_info_topic: /perception/camera/left/source/camera_info
+    right_info_topic: /perception/camera/right/source/camera_info
+    processing_hz: 10.0
+    max_camera_dt_s: 0.05
+    stale_timeout_s: 0.5
+    publish_debug: true
+    ground_z: -0.2408
+    min_bbox_height_px: 8.0
+    min_bbox_width_px: 3.0
+    bbox_bottom_margin_px: 2.0
+    bbox_bottom_offset_px: 0.0
+    duplicate_merge_radius_m: 0.75
+    roi_x_min: 0.5
+    roi_x_max: 15.0
+    roi_y_abs: 7.0
+    boundary_min_cones: 2
+    boundary_min_span: 2.5
+    boundary_residual: 0.3
+    boundary_max_heading_deg: 30.0
+    boundary_max_difference_deg: 10.0
+    corridor_width_min: 1.0
+    corridor_width_max: 6.5
+    path_max_forward: 15.0
+    path_min_forward: 4.0
+    path_step: 0.25
+    red_gate_max_stagger_m: 2.0

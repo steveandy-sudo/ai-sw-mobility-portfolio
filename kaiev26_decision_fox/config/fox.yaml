@@ -1,0 +1,14 @@
+kaiev26_decision_fox:
+  ros__parameters:
+    use_sim_time: false
+    odometry_topic: /localization/odometry
+    route_context_topic: /planning/route_context
+    trajectory_topic: /debug/decision_fox/trajectory
+    marker_topic: /debug/decision_fox/markers
+    publish_rate_hz: 10.0
+    trail_max_points: 4000
+    trail_min_spacing_m: 0.10
+    trail_max_jump_m: 8.0
+    vehicle_length_m: 2.60
+    vehicle_width_m: 1.18
+    vehicle_height_m: 0.75

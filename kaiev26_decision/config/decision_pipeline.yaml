@@ -1,0 +1,88 @@
+kaiev26_perception_gateway:
+  ros__parameters:
+    use_sim_time: true
+    publish_rate_hz: 30.0
+    stale_data_sec: 0.35
+    obstacle_path_half_width_m: 1.4
+    obstacle_detect_distance_m: 20.0
+    traffic_light_map_match_distance_m: 2.0
+
+kaiev26_route_zone_manager:
+  ros__parameters:
+    use_sim_time: true
+    publish_rate_hz: 20.0
+    global_route_marker_topic: /debug/global_route_markers
+    route_state_marker_topic: /debug/route_state_markers
+    map_frame_id: map
+    base_frame_id: base_footprint
+    route_config: ""
+    lookahead_distance_m: 18.0
+    local_path_spacing_m: 1.0
+    max_projection_distance_m: 15.0
+    progress_search_window_m: 35.0
+    start_snap_distance_m: 8.0
+    start_snap_heading_error_rad: 0.8
+    start_snap_progress_m: 35.0
+    initial_projection_max_heading_error_rad: 0.7
+    initial_projection_heading_weight_m: 4.0
+    finish_zone_distance_m: 4.0
+    intersection_zone_radius_m: 8.0
+
+kaiev26_main_planning_engine:
+  ros__parameters:
+    use_sim_time: true
+    # 2026-09-05 K-City manual runs: qualifying cruise median 3.27 m/s.
+    # Launch files override final-course cruise to 3.5 m/s.
+    base_speed_mps: 3.2
+    degraded_speed_mps: 2.5
+    static_stop_enabled: false
+    static_stop_stopped_speed_mps: 0.1
+    obstacle_slow_speed_mps: 2.2
+    obstacle_return_speed_mps: 2.6
+    stopline_approach_distance_m: 18.0
+    traffic_release_confirm_sec: 0.4
+    yellow_stop_decel_mps2: 2.0
+    yellow_reaction_time_sec: 0.25
+    signal_pass_line_jump_m: 3.0
+    comfortable_decel_mps2: 1.4
+    pre_brake_decel_distance_m: 6.0
+    brake_entry_speed_mps: 2.0
+    vehicle_front_overhang_m: 1.98
+    vehicle_width_m: 1.18
+    obstacle_clearance_m: 0.30
+    obstacle_lane_departure_allowed: true
+    obstacle_side_deadband_m: 0.30
+    obstacle_preferred_side: left
+    obstacle_transition_length_m: 10.0
+    obstacle_return_length_m: 10.0
+    stopline_clearance_m: 1.5
+    route_rejoin_cross_track_m: 0.8
+    route_rejoin_heading_error_rad: 0.45
+    route_rejoin_exit_cross_track_m: 0.30
+    route_rejoin_exit_heading_error_rad: 0.15
+    rejoin_speed_min_mps: 1.4
+    rejoin_speed_max_mps: 2.6
+    rejoin_slow_cross_track_m: 2.5
+    rejoin_slow_heading_error_rad: 0.8
+    planning_deadline_ms: 50.0
+    aeb_stale_objects_sec: 0.25
+    aeb_obstacle_path_half_width_m: 1.35
+    aeb_warning_ttc_sec: 2.0
+    aeb_brake_ttc_sec: 0.8
+    aeb_warning_distance_m: 5.0
+    aeb_emergency_distance_m: 1.4
+    aeb_bypass_brake_ttc_sec: 0.25
+    aeb_bypass_emergency_distance_m: 0.6
+    aeb_release_clear_ticks: 8
+
+kaiev26_debug_monitor:
+  ros__parameters:
+    use_sim_time: true
+    publish_rate_hz: 10.0
+    marker_topic: /debug/autonomous_markers
+    command_topic: /planning/command
+    vehicle_state_topic: /vehicle/state
+    wheelbase_m: 1.2991017929
+    trajectory_horizon_sec: 3.0
+    trajectory_step_sec: 0.1
+    trajectory_stationary_speed_mps: 0.05
