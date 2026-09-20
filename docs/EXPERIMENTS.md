@@ -18,18 +18,31 @@ The control-side correction and successful integrated vehicle behavior are separ
 
 The selected source provides route/zone mission handling; Pure Pursuit, Stanley and mixed tracking modes; cone-course perception/tracking combinations; and a Foxglove monitor. These describe available implementations. Configuration values, unit-test inputs and screenshot readouts are not aggregate vehicle-performance results.
 
-## Next integration record
+## Next experiment: steering response and path tracking
 
-For the next decision-stack trial, record:
+**Question:** After the control-side correction, does the decision stack track the same route without the earlier steering oscillation?
 
-1. Decision, Control and Localization versions; controller and parameter file.
-2. Test environment, course, speed and initial pose.
-3. Target versus actual steering response after the motor-delay correction.
-4. Path-tracking behavior and whether the earlier oscillation remains.
-5. Stop-state transitions and observed vehicle stopping behavior.
-6. MCAP/log location and a matching video or monitor capture, if available.
+This is a proposed protocol, not a completed experiment. A simulation or existing-log replay can prepare the analysis; validation of the physical correction requires a separately recorded vehicle trial.
 
-Use the trial result to update this table and the portfolio page. Keep the raw record available so observations can be traced to the corresponding settings.
+### Keep the comparison interpretable
+
+Record Decision, Control, and Localization commits; controller mode; the full parameter file; route; initial pose; speed profile; environment; and intervention times. Compare runs only when these conditions are compatible. If no matching pre-correction log exists, report the new run on its own rather than inventing a before/after comparison.
+
+| Measure | Definition and unit | Record needed |
+| --- | --- | --- |
+| Steering tracking error | Commanded minus measured steering on aligned timestamps; MAE and maximum absolute error in degrees | Command source, vehicle steering feedback, timestamp convention, unit conversion |
+| Response delay | A specified command change to a specified measured-response threshold, in milliseconds | Command/feedback traces and the chosen threshold; report each event |
+| Lateral tracking error | Signed distance to the reference path; RMS and maximum absolute value in meters | Localization, reference path, common frame, and time interval |
+| Completion | Completed runs / attempted runs, with interventions and stop reasons listed | A definition of completion and every attempt, including interrupted runs |
+| AEB stop behavior | Stop trigger, first brake request, zero-speed time, and signed final position relative to the stop gate | Cone/gate estimate, commands, pose, vehicle speed, and clock alignment |
+
+In the decision-test workflow, distinguish `/decision/raw_command`, `/planning/command`, and the Control output `/vehicle/command`; they are different points in the command chain. Read actual fields and units from the matching message definitions. Use `/vehicle/state`, `/localization/odometry`, `/planning/target_path`, and route/mission context when present. A topic absent from a log should be listed as missing rather than estimated from a screenshot.
+
+### Retain a traceable trial record
+
+For each attempt, keep a run ID, date, source versions, settings, MCAP/log path, analyzed start/end timestamps, exclusions, computed result table, and a matching video or monitor capture. A short portfolio clip can illustrate the behavior; metrics must state whether they cover the full attempt or only a selected interval.
+
+The first useful artifact is one synchronized plot of target steering, actual steering, speed, and lateral error, followed by a concise explanation of any mismatch. Numeric results will be added when the corresponding raw record is available.
 
 ## Included visual material
 

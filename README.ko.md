@@ -2,82 +2,92 @@
 
 **2026 대학생 AI·SW 모빌리티 경진대회 · ROS 2 Humble**
 
-[English](README.md) · [프로젝트 포트폴리오](https://steveandy-sudo.github.io/projects/ai-sw-mobility/)
+[English](README.md) · [프로젝트 포트폴리오](https://steveandy-sudo.github.io/projects/ai-sw-mobility/) · [실행 안내](docs/PORTFOLIO_SETUP.md)
 
-자율주행 경진대회 차량을 위한 경로 기반 판단, 경로 추종, 라바콘 제동 검차 프로젝트입니다. 판단 파이프라인, 차량 명령 생성, AEB 시험과 실시간·기록 데이터 분석용 Foxglove 도구를 함께 정리했습니다.
+자율주행 경진대회 차량의 경로 기반 판단, 경로 추종, 라바콘 제동 검차를 개발하는 프로젝트입니다. 판단·제어 구현과 함께 미션 상태, 목표 경로, 조향 명령, 차량 피드백을 관찰하는 도구를 정리했습니다.
 
 | 기간 | 역할 | 팀 | 환경 |
 | --- | --- | --- | --- |
 | 2026년 3월–진행 중 | 황정헌 — 판단 | 전체 27명, 판단 파트 5명 | ROS 2 Humble · Gazebo · Foxglove |
 
+## 결과와 현재 상태
+
+| 환경 | 확인된 기록 | 현재 판단 |
+| --- | --- | --- |
+| Gazebo | AEB 폐루프 시험 진행 | 시뮬레이션에서 파이프라인 연결 확인 |
+| 초기 실차 시험 | 약 **7 km/h**, 조향 흔들림 관찰 | 조향 응답을 후속 통합 과제로 확인 |
+| 제어 파트 수정 | 스티어링 모터 지연시간 문제 확인 및 수정 | **수정 후 판단 코드 통합 재시험 대기** |
+| 오프라인 제어 검사 | 저장소 정리 시 [기존 AEB 테스트 29개 통과](docs/VALIDATION.md) | 기하 계산, 제동 로직, 시험 구성 및 패키지 구조 확인 |
+
+다음 실험은 수정된 조향 시스템에 판단 코드를 연결하고 같은 조건에서 목표 조향·실제 조향·경로 오차를 함께 확인하는 것입니다. [실험 기록](docs/EXPERIMENTS.md)에 수집할 항목을 정리했으며, 수정 이후 실차 결과는 아직 없습니다.
+
 ## 주요 개발 영역
 
-판단, 경로 추종, AEB 통합과 검증을 중심으로 작업했습니다.
+- **주행 판단:** 경로·구역 문맥, 미션 상태 처리, 목표 경로와 속도 인터페이스.
+- **경로 추종:** Stanley 제어, 조향각·변화율 제한, 차량 명령 처리와의 연동.
+- **라바콘 AEB:** 경계 기반 중앙 경로, 빨간 진입선 정지, 입력 누락·지연 처리.
+- **통합과 관찰:** Gazebo 시험, 초기 실차 시험, Foxglove를 이용한 실시간·기록 신호 확인.
 
-- **AEB:** 라바콘 경계 기반 중앙 경로 생성, 빨간 진입선 정지 로직, 입력 누락·지연 상태 처리.
-- **경로 추종:** Stanley 제어, 조향 제한, 추종 출력과 차량 명령의 연동.
-- **통합과 디버깅:** Gazebo 폐루프 시험과 Foxglove를 이용한 경로·조향·정지 상태 확인.
-- **실차 시험:** 초기 저속 시험과 조향 응답 문제 분석.
+## 시스템 구조
 
-## 현재 진행 상황
-
-Gazebo 폐루프 검증과 약 **7 km/h의 초기 실차 시험**을 진행했습니다. 시험 중 관찰된 조향 흔들림과 관련해 제어 파트에서 스티어링 모터의 지연시간 문제를 확인하고 수정했습니다. **수정 이후 판단 코드를 연결한 실차 재시험은 아직 진행하지 않았으며, 다음 단계는 통합 상태에서의 재검증입니다.**
-
-현재 코드에는 카메라·LiDAR 퓨전과 카메라 단독 인지에 Pure Pursuit 또는 Stanley를 조합한 AEB 시나리오 4종이 포함되어 있습니다. 각 조합의 실측 결과는 시험 조건과 함께 별도로 기록합니다.
-
-## 시스템 흐름
+일반 주행 시험은 다음 흐름으로 구성됩니다.
 
 ```mermaid
 flowchart LR
-  P[인지] --> D[경로 / 구간 정보와 미션 FSM]
-  L[측위] --> D
-  D --> T[목표 경로와 속도]
-  T --> M[주행 제어]
-  V[차량 피드백] --> M
-  M --> G[외부 Control 명령 검증]
-  G --> C[차량 명령]
-  D --> F[Foxglove 모니터]
-  V --> F
+    Inputs[인지 및 위치추정] --> Decision[경로 / 구역 문맥과 미션 FSM]
+    Decision -->|목표 경로와 속도| Motion[주행 제어]
+    Feedback[차량 피드백] --> Motion
+    Motion -->|원시 명령| TUI[시험 인터페이스 게이트]
+    TUI -->|Planning 명령| Governor[외부 Control 명령 관리자]
+    Governor --> Vehicle[차량]
+    Vehicle --> Feedback
+    Decision --> Monitor[Foxglove 모니터]
+    Feedback --> Monitor
 ```
 
-라바콘 AEB는 별도의 인지·추종 진입점을 사용하며 일반 주행 판단과 구분해 실행합니다. 주행 시험에서는 터미널 인터페이스가 출발·AUTO 조건을 확인한 뒤 원시 제어 명령을 `/planning/command`로 전달합니다.
+이 시험 흐름에서는 시험 인터페이스가 `/decision/raw_command`를 받아 `/planning/command`의 발행을 담당합니다. 라바콘 AEB는 별도 시험 흐름으로 실행하며, 카메라–LiDAR 융합·카메라 단독 인지와 Pure Pursuit·Stanley 추종을 조합한 네 구성을 제공합니다.
 
-## 핵심 코드 안내
+### 코드에서 확인할 수 있는 설계 선택
 
-| 영역 | 구현 진입점 |
+| 선택 | 구현 방식 | 평가 시 확인할 점 |
+| --- | --- | --- |
+| 미션 판단과 경로 추종 분리 | FSM이 목표 경로·속도를, 제어기가 조향·속도 명령을 생성 | 상태 선택과 추종 응답을 나누어 관찰 가능 |
+| 조향각과 변화율 제한 | 기하학적 출력에 각도·변화율 제약 적용 | 계산된 명령과 실제 구동기의 응답 비교 필요 |
+| 사용할 수 없는 입력에서 AEB 제동 | 상태·경로 지연, 잘못된 좌표계·기하 등에 목표 속도 0과 제동 요청 | 입력 실패 이유를 출력에서 확인 가능 |
+| 빨간 진입선 확인 및 유지 | 반복 관측으로 확정하고 이동을 보정하며, 통과 시 제동을 유지 | 이후의 콘 열이 정지 기준을 임의로 바꾸지 않도록 구성 |
+
+제동 분기에서는 마지막으로 제한된 조향 명령을 유지하며 정지를 요청합니다. 위 내용은 구현 특성이며, 제동거리와 경로 오차는 시험 로그로 평가해야 합니다.
+
+## 코드 읽기 안내
+
+| 영역 | 주요 코드 |
 | --- | --- |
-| 경로와 미션 판단 | [Route·Zone 관리](kaiev26_decision/kaiev26_decision/route_zone_manager_node.py) · [판단 엔진](kaiev26_decision/kaiev26_decision/main_planning_engine_node.py) · [미션 FSM](kaiev26_decision/kaiev26_decision/scenario_modules/) |
-| 경로 추종·속도 제어 | [Motion Control](kaiev26_motion_control/kaiev26_motion_control/motion_control_node.py) · [설정값](kaiev26_motion_control/config/motion_control.yaml) |
-| 라바콘 인지·경로 생성 | [경로 기하](kaiev26_aeb/kaiev26_aeb/core.py) · [카메라 단독 기하](kaiev26_aeb/kaiev26_aeb/yolo_core.py) |
-| 라바콘 추종·제동 | [Pure Pursuit·정지 로직](kaiev26_aeb/kaiev26_aeb/pursuit.py) · [Stanley](kaiev26_aeb/kaiev26_aeb/stanley.py) · [시험 조합](kaiev26_aeb/kaiev26_aeb/trial_profiles.py) |
-| 시험 운용 | [판단 시험 인터페이스](kaiev26_decision/kaiev26_decision/test_tui.py) · [AEB 시험 인터페이스](kaiev26_aeb/kaiev26_aeb/trial_tui.py) |
-| 시각화 | [Foxglove 패키지](kaiev26_decision_fox/README.md) · [사용자 패널](kaiev26_decision_fox/foxglove/src/) |
+| 경로·미션 판단 | [경로·구역 관리자](kaiev26_decision/kaiev26_decision/route_zone_manager_node.py) · [판단 엔진](kaiev26_decision/kaiev26_decision/main_planning_engine_node.py) · [미션 FSM](kaiev26_decision/kaiev26_decision/scenario_modules/) |
+| 경로 추종 | [주행 제어기](kaiev26_motion_control/kaiev26_motion_control/motion_control_node.py) · [설정](kaiev26_motion_control/config/motion_control.yaml) |
+| 라바콘 기하 | [융합 처리](kaiev26_aeb/kaiev26_aeb/core.py) · [카메라 단독 처리](kaiev26_aeb/kaiev26_aeb/yolo_core.py) |
+| AEB 추종·정지 | [Pure Pursuit·입력 검사·빨간선 정지](kaiev26_aeb/kaiev26_aeb/pursuit.py) · [Stanley](kaiev26_aeb/kaiev26_aeb/stanley.py) · [시험 구성](kaiev26_aeb/kaiev26_aeb/trial_profiles.py) |
+| 시험·관찰 | [판단 시험 인터페이스](kaiev26_decision/kaiev26_decision/test_tui.py) · [AEB 시험 인터페이스](kaiev26_aeb/kaiev26_aeb/trial_tui.py) · [Foxglove 패키지](kaiev26_decision_fox/README.md) |
 
-## 기록 데이터 분석 화면
+## 기록 데이터 확인 화면
 
-<img src="docs/foxglove_replay/replay_mid.png" alt="카메라 영상, 경로 정보, 미션 상태와 목표·실제 차량 신호를 함께 보여주는 Foxglove MCAP 재생 화면" width="900" />
+<img src="docs/foxglove_replay/replay_mid.png" alt="경로 문맥, 카메라, 미션 상태와 목표·실제 차량 신호를 보여주는 Foxglove MCAP 재생 화면" width="900" />
 
-*원본에 포함된 기록 데이터 재생 화면입니다. 카메라 영상, 경로 정보, 미션 상태와 차량 신호를 한 화면에서 확인합니다.*
+*기존 MCAP 재생 화면입니다. 경로, 카메라, 준비 상태와 목표·실제 신호를 함께 확인합니다. 이 프레임은 대기 상태의 인터페이스 예시이며, 순간 수치를 주행 전체의 성능으로 해석하지 않습니다.*
 
-## 저장소 구조
+## 빌드와 문서
 
-```text
-kaiev26_decision/         경로·구간 판단, 미션 FSM, 시험 인터페이스
-kaiev26_motion_control/   경로 추종, 속도 제어, 차량 명령 생성
-kaiev26_aeb/              라바콘 인지, 추종과 제동 검차
-kaiev26_decision_fox/     Foxglove 연동 도구와 사용자 패널
-docs/                    구조, 운용, 실험과 소스 기록
+Ubuntu 22.04 / ROS 2 Humble 및 해당 버전의 팀 작업공간이 필요합니다. `kaiev26_msgs`, Control, Localization, 인지와 선택한 센서·시뮬레이터 의존성을 준비해야 하며, 카메라 기반 AEB에는 외부 모델 가중치도 필요합니다. 이 저장소를 `~/KAI_ws/src/Decision`에 배치한 뒤 다음 순서로 빌드합니다.
+
+```bash
+cd ~/KAI_ws
+source /opt/ros/humble/setup.bash
+colcon build --symlink-install --packages-select \
+  kaiev26_decision kaiev26_motion_control kaiev26_decision_fox kaiev26_aeb
+source install/setup.bash
 ```
 
-선택한 개발 버전의 패키지 배치를 유지해 실행 파일과 상세 운용 문서가 함께 연결되도록 구성했습니다.
+위 명령은 ROS 환경의 빌드 절차입니다. 저장소 준비 시에는 오프라인 검사를 수행했으며, 전체 ROS 빌드와 통합 주행에는 팀 환경이 필요합니다.
 
-## 문서와 재현 환경
-
-- [환경 구성과 검증 범위](docs/PORTFOLIO_SETUP.md)
-- [시스템 구조](docs/ARCHITECTURE.md) · [경로 추종](docs/ROUTE_TRACKING.md) · [설정값](docs/PARAMETER_BOOK.md)
-- [운용 가이드](docs/DECISION_RUNBOOK.md) · [미션 시나리오](docs/MISSION_SCENARIOS.md)
-- [실험 상태와 다음 통합 시험](docs/EXPERIMENTS.md)
-- [이번 수집본의 검증 기록](docs/VALIDATION.md)
-- [소스 버전과 파일 기록](docs/SOURCE_MAP.md)
-
-실행에는 각 시험에 맞는 외부 팀 메시지, Control, Localization, 센서와 시뮬레이션 패키지가 필요합니다. 소스 일치, Python 문법, ROS 패키지 XML 검사와 **기존 오프라인 AEB 테스트 29개**를 통과했습니다. ROS 통합 실행과 실차 시험 상태는 검증 기록에서 별도로 설명합니다.
+- **실행과 관찰:** [환경 설정](docs/PORTFOLIO_SETUP.md) · [운용 안내](docs/DECISION_RUNBOOK.md) · [미션 시나리오](docs/MISSION_SCENARIOS.md)
+- **설계 이해:** [구조](docs/ARCHITECTURE.md) · [경로 추종](docs/ROUTE_TRACKING.md) · [매개변수](docs/PARAMETER_BOOK.md)
+- **근거 확인:** [실험 기록](docs/EXPERIMENTS.md) · [검증 기록](docs/VALIDATION.md) · [원본 코드 기록](docs/SOURCE_MAP.md)
