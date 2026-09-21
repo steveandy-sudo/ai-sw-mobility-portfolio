@@ -2,27 +2,33 @@
 
 ## Current record
 
-Updated from Junghun Hwang's project report on 2026-09-17.
+Updated from Junghun Hwang's project report on **2026-09-22**. The latest trials took place on **2026-09-19 and 2026-09-20**, during the organizer's open-practice period at the competition venue, using the real vehicle.
 
 | Stage | Recorded status |
 | --- | --- |
 | Gazebo | Closed-loop validation of the AEB pipeline reported |
 | Initial vehicle trials | Approximately 7 km/h; steering oscillation observed |
 | Control-side update | The control team identified and corrected a steering-motor delay issue |
-| Post-correction decision integration | The decision code has not yet been run with the correction |
-| Competition result | No new result reported |
+| Preliminary-course waypoint driving | Successful at **10 m/s (36 km/h)** during venue practice |
+| Final-course waypoint driving | Successful at **10 m/s (36 km/h)** during venue practice |
+| AEB stop | Successful at speeds up to **50 km/h**, against a reported competition requirement of **30 km/h** |
+| Official competition result | The latest report concerns open practice, not official qualifying or final results |
 
-The control-side correction and successful integrated vehicle behavior are separate milestones. The current record establishes the former; the latter requires a new trial.
+**AEB success criterion:** recognize the red cones, apply braking at the start of the red-cone zone, and come to a complete stop before the end of that zone.
+
+The tests were repeated over the two practice days. The participant recalled roughly ten repetitions, but did not provide an attempt-by-attempt log or a breakdown by course and speed. No exact trial count, success rate, or stopping-distance statistic is published from that recollection. The 50 km/h figure is the highest reported successful AEB test speed; waypoint driving was reported at 10 m/s (36 km/h).
+
+The earlier steering-delay correction and the new successful trials are recorded as development milestones. Quantifying the correction's effect requires compatible before/after logs; the latest report alone does not establish a reduction in steering error.
 
 ## Current source capabilities
 
 The selected source provides route/zone mission handling; Pure Pursuit, Stanley and mixed tracking modes; cone-course perception/tracking combinations; and a Foxglove monitor. These describe available implementations. Configuration values, unit-test inputs and screenshot readouts are not aggregate vehicle-performance results.
 
-## Next experiment: steering response and path tracking
+## Follow-up analysis: steering response, path tracking, and AEB
 
-**Question:** After the control-side correction, does the decision stack track the same route without the earlier steering oscillation?
+**Question:** What path error, steering response, and stopping margin accompanied the successful venue-practice trials, and how consistently were those outcomes repeated?
 
-This is a proposed protocol, not a completed experiment. A simulation or existing-log replay can prepare the analysis; validation of the physical correction requires a separately recorded vehicle trial.
+The course-driving and stop outcomes above were reported as completed real-vehicle practice. The quantitative analysis below is planned and requires the corresponding logs. Simulation or recorded-data replay should be labeled separately from the vehicle trial it represents.
 
 ### Keep the comparison interpretable
 
@@ -42,7 +48,9 @@ In the decision-test workflow, distinguish `/decision/raw_command`, `/planning/c
 
 For each attempt, keep a run ID, date, source versions, settings, MCAP/log path, analyzed start/end timestamps, exclusions, computed result table, and a matching video or monitor capture. A short portfolio clip can illustrate the behavior; metrics must state whether they cover the full attempt or only a selected interval.
 
-The first useful artifact is one synchronized plot of target steering, actual steering, speed, and lateral error, followed by a concise explanation of any mismatch. Numeric results will be added when the corresponding raw record is available.
+The first useful artifacts are a waypoint clip for each course and an AEB clip showing the red-cone zone, braking, and final stop, paired with speed and command records. Path-error and stopping-distance statistics will be added when the corresponding raw record is available.
+
+The collected source is the September 15 `hwj` snapshot documented in [SOURCE_MAP.md](SOURCE_MAP.md). The exact Decision, Control, and Localization revisions used on September 19–20 have not yet been supplied; the performance report does not establish that the archived snapshot is identical to the tested workspace.
 
 ## Included visual material
 

@@ -12,21 +12,24 @@ Route-based driving decisions, path tracking, and cone-course braking for an aut
 
 ## Results and current status
 
-| Setting | Available evidence | Current conclusion |
+| Setting | Trial condition | Result |
 | --- | --- | --- |
-| Gazebo | Reported closed-loop AEB trials | Pipeline integration exercised in simulation |
-| Initial vehicle trials | Approximately **7 km/h**, with steering oscillation observed | Steering response became the next integration issue |
-| Control-side correction | Steering-motor delay identified and corrected by the control team | **Decision-stack retest pending** |
+| Venue practice: preliminary course | Real vehicle, **10 m/s (36 km/h)** | Successful waypoint driving |
+| Venue practice: final course | Real vehicle, **10 m/s (36 km/h)** | Successful waypoint driving |
+| Venue practice: AEB stop | Speeds up to **50 km/h**; competition requirement **30 km/h** | Braking at the start of the red-cone zone; full stop before its end |
+| Earlier Gazebo development | Closed-loop AEB trials | Pipeline integration exercised in simulation |
 | Offline controller checks | [29 existing AEB tests passed](docs/VALIDATION.md) during repository preparation | Geometry, braking logic, trial profiles, and package layout checked |
 
-The next experiment is to rerun the decision stack with the corrected steering system and compare commanded steering, measured steering, and path error under fixed conditions. The [experiment record](docs/EXPERIMENTS.md) defines what to collect; no post-correction vehicle result is available yet.
+The latest real-vehicle tests took place on **September 19–20, 2026**, during the organizer's open-practice period at the competition venue. Waypoint driving and AEB stopping were exercised repeatedly. These are practice results, not official competition results; the 50 km/h figure applies to AEB trials.
+
+For AEB, the success criterion was to detect the red cones, brake at the start of the red-cone zone, and stop before its end. The [experiment record](docs/EXPERIMENTS.md) separates these reported outcomes from the next measurements: stopping distance, path error, steering response, and repeatability.
 
 ## Development focus
 
 - **Driving decisions:** route and zone context, mission-state handling, and target path/speed interfaces.
 - **Path tracking:** Stanley control, steering bounds and rate limits, and integration with vehicle-command handling.
 - **Cone-course AEB:** cone-boundary center paths, red-entry stop logic, and missing/stale-input handling.
-- **Integration and observation:** Gazebo trials, initial vehicle testing, and Foxglove inspection of recorded and live signals.
+- **Integration and observation:** Gazebo development, repeated real-vehicle venue practice, and Foxglove inspection of recorded and live signals.
 
 ## System architecture
 

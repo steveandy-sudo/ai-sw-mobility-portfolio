@@ -24,11 +24,11 @@ Test files:
 
 Coverage includes Pure Pursuit geometry, invalid/stale input braking, a kinematic tracking exercise, the scenario matrix and package/parameter layout. The test's 30 km/h input is a synthetic controller test condition, not a measured vehicle speed.
 
-## Checks requiring other environments
+## Scope of collection checks
 
 - ROS 2 message-dependent tests and full `colcon build`/`colcon test`.
 - Foxglove extension build and live bridge integration.
 - Gazebo integration with the external vehicle workspace.
-- Real-vehicle execution of the decision stack after the reported Control correction.
+- Reproduction of vehicle trials with the matching full team workspace and hardware. The September 19–20 venue-practice outcomes are recorded separately in [EXPERIMENTS.md](EXPERIMENTS.md).
 
 No vehicle or hardware interface was started during collection. Reported project experiments are documented separately in [EXPERIMENTS.md](EXPERIMENTS.md).
