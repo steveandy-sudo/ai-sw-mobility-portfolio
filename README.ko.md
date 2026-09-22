@@ -16,13 +16,25 @@
 | --- | --- | --- |
 | 대회장 연습: 예선 코스 | 실차, **10 m/s(36 km/h)** | Waypoint 주행 성공 |
 | 대회장 연습: 본선 코스 | 실차, **10 m/s(36 km/h)** | Waypoint 주행 성공 |
-| 대회장 연습: AEB 정지 | 최대 **50 km/h**, 대회 요구 **30 km/h** | 빨간 콘 구간 시작점에서 제동, 구간 끝 이전 완전 정지 |
+| 대회장 연습: AEB 정지 명령 | **50 km/h**, 대회 요구 **30 km/h** | 빨간 콘에서 정지 명령 확인. 브레이크 하드웨어 이상으로 구간 내 정지 미달성 |
 | 이전 Gazebo 개발 | AEB 폐루프 시험 | 시뮬레이션에서 파이프라인 연결 확인 |
 | 오프라인 제어 검사 | 저장소 정리 시 [기존 AEB 테스트 29개 통과](docs/VALIDATION.md) | 기하 계산, 제동 로직, 시험 구성 및 패키지 구조 확인 |
 
 최신 실차 시험은 주최 측이 대회장을 개방한 **2026년 9월 19–20일 연습 기간**에 수행했습니다. Waypoint 주행과 AEB 정지를 여러 차례 반복했습니다. 대회 공식 예선·본선 결과와 구분되는 연습 결과이며, 50 km/h는 AEB 시험 속도입니다.
 
+영상 검토 시 브레이크 4개 중 2개가 작동하지 않았음을 확인했습니다. 차량이 정지 구간을 넘었으므로 정지 명령 확인과 실제 구간 내 정지 성공을 구분합니다.
+
 AEB 성공 기준은 빨간 콘을 인지하여 구간 시작점에서 제동하고, 빨간 콘 구간이 끝나기 전에 완전히 정지하는 것입니다. [실험 기록](docs/EXPERIMENTS.md)에 이번 결과와 향후 정량 분석 항목인 정지 거리·경로 오차·조향 응답·반복성을 정리했습니다.
+
+## 대회장 연습 영상
+
+[![본선 코스 waypoint 주행](https://steveandy-sudo.github.io/media/projects/ai-sw-mobility/03-final-course-waypoint-poster.jpg)](https://steveandy-sudo.github.io/projects/ai-sw-mobility/#evidence-and-current-result)
+
+**[본선 waypoint 주행 GIF](https://steveandy-sudo.github.io/media/projects/ai-sw-mobility/03-final-course-waypoint.gif)** — 원래 재생 속도의 연속 17초. 주행 속도 10 m/s(36 km/h)는 시험 참여자 확인값입니다.
+
+**[50 km/h AEB 시험 GIF](https://steveandy-sudo.github.io/media/projects/ai-sw-mobility/04-aeb-braking-trial.gif)** — 접근·빨간 콘 정지 명령·구간 초과가 이어지는 연속 9초. 정지 명령은 확인했으나 브레이크 4개 중 2개가 작동하지 않아 구간 내 정지는 미달성했습니다.
+
+모두 9월 20일 대회장 연습 영상입니다. [프로젝트 상세](https://steveandy-sudo.github.io/projects/ai-sw-mobility/#evidence-and-current-result)에서 GIF를 재생할 수 있습니다.
 
 ## 주요 개발 영역
 
@@ -72,6 +84,8 @@ flowchart LR
 | 시험·관찰 | [판단 시험 인터페이스](kaiev26_decision/kaiev26_decision/test_tui.py) · [AEB 시험 인터페이스](kaiev26_aeb/kaiev26_aeb/trial_tui.py) · [Foxglove 패키지](kaiev26_decision_fox/README.md) |
 
 ## 기록 데이터 확인 화면
+
+[AEB 콘·명령 기록 재생 GIF](https://steveandy-sudo.github.io/media/projects/ai-sw-mobility/05-aeb-foxglove-replay.gif)에서 Foxglove의 콘 형상·목표 속도·브레이크 명령 그래프를 볼 수 있습니다. 화면에 표시된 2배속 기록 재생을 그대로 유지했습니다. 목표 속도는 실제 측정 속도와 구분하며, 앞선 차량 촬영 영상과는 별도의 기록 재생 예시로 제공합니다.
 
 <img src="docs/foxglove_replay/replay_mid.png" alt="경로 문맥, 카메라, 미션 상태와 목표·실제 차량 신호를 보여주는 Foxglove MCAP 재생 화면" width="900" />
 

@@ -16,13 +16,25 @@ Route-based driving decisions, path tracking, and cone-course braking for an aut
 | --- | --- | --- |
 | Venue practice: preliminary course | Real vehicle, **10 m/s (36 km/h)** | Successful waypoint driving |
 | Venue practice: final course | Real vehicle, **10 m/s (36 km/h)** | Successful waypoint driving |
-| Venue practice: AEB stop | Speeds up to **50 km/h**; competition requirement **30 km/h** | Braking at the start of the red-cone zone; full stop before its end |
+| Venue practice: AEB command trial | **50 km/h**; competition requirement **30 km/h** | Stop command issued at the red cones; a brake hardware fault prevented a stop within the zone |
 | Earlier Gazebo development | Closed-loop AEB trials | Pipeline integration exercised in simulation |
 | Offline controller checks | [29 existing AEB tests passed](docs/VALIDATION.md) during repository preparation | Geometry, braking logic, trial profiles, and package layout checked |
 
 The latest real-vehicle tests took place on **September 19–20, 2026**, during the organizer's open-practice period at the competition venue. Waypoint driving and AEB stopping were exercised repeatedly. These are practice results, not official competition results; the 50 km/h figure applies to AEB trials.
 
+During footage review, two of the four brakes were reported inoperative. The vehicle overran the stopping zone, so this is a demonstrated stop-command event, not a successful physical stop.
+
 For AEB, the success criterion was to detect the red cones, brake at the start of the red-cone zone, and stop before its end. The [experiment record](docs/EXPERIMENTS.md) separates these reported outcomes from the next measurements: stopping distance, path error, steering response, and repeatability.
+
+## Venue-practice excerpts
+
+[![Final-course waypoint driving](https://steveandy-sudo.github.io/media/projects/ai-sw-mobility/03-final-course-waypoint-poster.jpg)](https://steveandy-sudo.github.io/projects/ai-sw-mobility/#evidence-and-current-result)
+
+**[Final-course waypoint GIF](https://steveandy-sudo.github.io/media/projects/ai-sw-mobility/03-final-course-waypoint.gif)** — 17 continuous seconds, at original speed; reported run speed 10 m/s (36 km/h).
+
+**[50 km/h AEB trial GIF](https://steveandy-sudo.github.io/media/projects/ai-sw-mobility/04-aeb-braking-trial.gif)** — nine continuous seconds covering approach, the red-cone event, and the stopping-zone overrun. The stop command was issued, but two of four brakes were reported inoperative. This is not a successful in-zone stop.
+
+Both excerpts are from September 20 venue practice. The [case study](https://steveandy-sudo.github.io/projects/ai-sw-mobility/#evidence-and-current-result) includes click-to-play GIFs and context. Speeds are participant-reported; raw telemetry is not overlaid.
 
 ## Development focus
 
@@ -72,6 +84,8 @@ The braking branch retains the last limited steering command while requesting a 
 | Trial operation and monitoring | [Decision test interface](kaiev26_decision/kaiev26_decision/test_tui.py) · [AEB test interface](kaiev26_aeb/kaiev26_aeb/trial_tui.py) · [Foxglove package](kaiev26_decision_fox/README.md) |
 
 ## Recorded-run inspection
+
+[AEB cone and command replay (GIF)](https://steveandy-sudo.github.io/media/projects/ai-sw-mobility/05-aeb-foxglove-replay.gif) shows cone geometry, target speed, and brake-command plots in Foxglove. The screen recording retains the visible 2× replay setting. Target speed is not measured vehicle speed; this view is presented separately from the onboard trial excerpt.
 
 <img src="docs/foxglove_replay/replay_mid.png" alt="Foxglove MCAP replay with route context, cameras, mission states, and target versus actual vehicle signals" width="900" />
 
