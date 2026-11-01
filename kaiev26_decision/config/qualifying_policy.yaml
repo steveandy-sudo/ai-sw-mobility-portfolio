@@ -5,6 +5,24 @@ source:
   map: square_intersection_gazebo_map
   route: kcity_quali_route.yaml
 
+# brake_margin_m (2026-10-15): front-bumper margin before the stop line on top of d_stop(v).
+# The line is the painted line of the map semantics (qualifying_landmarks.yaml, map_semantics);
+# the margins grew by the 0.3-1.2 m the old landmark copies sat before it, so the stop targets
+# stayed: front bumper about 3 m before the paint. Gazebo stops 0.5-0.7 m closer than the margin.
+# Q2 keeps 0.5 m more than the timed stops so the camera holds traffic light 318 while stopped.
+# School zone (1017 scenario, PDF mission 6 right turn -> 7 signal -> before 8 right turn):
+# 30 km/h by the judging speedometer, 1 min penalty. The map red surface
+# road_surface_manual_162 (school_zone_red) projects to route s 333.5-402.6 m; 2 m on each
+# side (both ends are curve slow-down zones). 7.5 m/s = 27 km/h leaves the 10/17 overshoot
+# (target 7.0 -> 7.27 m/s) below 30 km/h. Front bumper in at start, rear axle out at end;
+# lowers the target only and never brakes.
+speed_zones:
+  - id: SCHOOL_ZONE
+    start_route_s: 331.5
+    end_route_s: 404.6
+    speed_cap_mps: 7.5
+    pre_slow_decel_mps2: 0.5
+
 stages:
   - id: Q_STAGE_1
     traffic_light_enabled: false
@@ -14,8 +32,9 @@ stages:
       id: Z1_TIMED_STOP
       type: TIMED_STOP
       stop_line_id: stop_line_manual_264
-      brake_trigger_waypoint: 203
-      brake_trigger_route_s: 202.966612
+      brake_trigger_waypoint: 204
+      brake_trigger_route_s: 203.962210370
+      brake_margin_m: 2.75
       approach_distance_m: 30.0
       hold_sec: 3.0
 
@@ -27,13 +46,14 @@ stages:
       id: Z2_SIGNAL_OBEY
       type: SIGNAL_OBEY
       stop_line_id: stop_line_manual_058
-      brake_trigger_waypoint: 244
-      brake_trigger_route_s: 243.954400
+      brake_trigger_waypoint: 249
+      brake_trigger_route_s: 248.949893352
+      brake_margin_m: 2.80
       traffic_light_ids:
         - traffic_light_manual_318
       arrow_maneuver: NONE
       approach_distance_m: 30.0
-      commit_distance_m: 6.0
+      commit_distance_m: 8.0
 
   - id: Q_STAGE_3
     traffic_light_enabled: false
@@ -44,7 +64,8 @@ stages:
       type: TIMED_STOP
       stop_line_id: stop_line_manual_341
       brake_trigger_waypoint: 296
-      brake_trigger_route_s: 295.951674
+      brake_trigger_route_s: 295.947120840
+      brake_margin_m: 2.85
       approach_distance_m: 30.0
       hold_sec: 3.0
 
@@ -56,13 +77,14 @@ stages:
       id: Z4_SIGNAL_OBEY
       type: SIGNAL_OBEY
       stop_line_id: stop_line_manual_048
-      brake_trigger_waypoint: 337
-      brake_trigger_route_s: 336.942051
+      brake_trigger_waypoint: 340
+      brake_trigger_route_s: 339.937644152
+      brake_margin_m: 3.20
       traffic_light_ids:
         - traffic_light_manual_144
       arrow_maneuver: NONE
       approach_distance_m: 30.0
-      commit_distance_m: 6.0
+      commit_distance_m: 8.0
 
   - id: Q_STAGE_5
     traffic_light_enabled: false
@@ -70,3 +92,12 @@ stages:
     event:
       id: Z5_FINISH
       type: FINISH
+      # Painted start/finish line, surveyed 2026-10-25 with the GNSS antenna on it (RTK FIX,
+      # NARROW_INT): records/start_line in the start lane, records/final_line in the finish lane.
+      # The route crosses the line through the two points at finish_line_route_s (85.7 deg). The
+      # course speed holds until the antenna is finish_line_pass_margin_m past the line, then the
+      # car brakes and stops on the route extension (decision_pipeline.yaml finish_line_*).
+      finish_line_route_s: 555.669720
+      finish_line_points:
+        - {latitude_deg: 37.238943406, longitude_deg: 126.772968818}
+        - {latitude_deg: 37.238965823, longitude_deg: 126.772923934}

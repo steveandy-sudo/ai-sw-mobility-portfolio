@@ -9,7 +9,6 @@ setup(
     version="0.1.0",
     packages=[
         package_name,
-        f"{package_name}.scenario_modules",
         "kaiev26_export",
     ],
     data_files=[
@@ -33,9 +32,8 @@ setup(
             "route_zone_manager_node = kaiev26_decision.route_zone_manager_node:main",
             "main_planning_engine_node = kaiev26_decision.main_planning_engine_node:main",
             "debug_monitor_node = kaiev26_decision.debug_monitor_node:main",
-            "constant_route_plan_node = kaiev26_decision.test_tracking:main",
+            "signal_phase_tracker_node = kaiev26_decision.signal_phase_tracker_node:main",
             "route_readiness_node = kaiev26_decision.test_readiness:main",
-            "steering_step_test_node = kaiev26_decision.test_steering_step:main",
             "decision_test = kaiev26_decision.test_tui:main",
             "kaiev26_export = kaiev26_export.cli:main",
         ],

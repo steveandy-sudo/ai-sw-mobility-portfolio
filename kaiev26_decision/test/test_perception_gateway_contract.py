@@ -21,6 +21,7 @@ from kaiev26_decision.perception_gateway_node import (  # noqa: E402
     OBSERVATION_QOS,
     ObservationFrameJoiner,
     PerceptionGatewayNode,
+    light_numeric_id,
 )
 
 
@@ -48,7 +49,6 @@ def make_gateway() -> PerceptionGatewayNode:
     gateway.latest_traffic_lights = None
     gateway.latest_route_context = None
     gateway.observation_frames = ObservationFrameJoiner()
-    gateway.traffic_light_map_match_distance_m = 2.0
     return gateway
 
 
@@ -141,103 +141,93 @@ def mapped_route() -> RouteContext:
     return route
 
 
-def test_gateway_selects_observation_matching_mapped_signal() -> None:
-    gateway = make_gateway()
+def observed(track_id: int, state: int, lamps: int = 0, confidence: float = 0.9) -> TrafficLightObservation:
+    light = TrafficLightObservation()
+    light.track_id = track_id
+    light.state = state
+    light.lamps = lamps
+    light.confidence = confidence
+    return light
+
+
+def summarize(*lights: TrafficLightObservation):
     observations = TrafficLightObservationArray()
+    observations.lights = list(lights)
+    return make_gateway().summarize_traffic_control(observations, mapped_route())
 
-    off_route = TrafficLightObservation()
-    off_route.position = point(14.0, 7.0)
-    off_route.state = TrafficLightObservation.STATE_RED
-    off_route.confidence = 1.0
-    on_route = TrafficLightObservation()
-    on_route.position = point(14.5, 1.0)
-    on_route.state = TrafficLightObservation.STATE_GREEN
-    on_route.confidence = 0.9
-    observations.lights = [off_route, on_route]
 
-    distance, state, confidence = gateway.summarize_traffic_control(
-        observations, mapped_route()
-    )
+RED, GREEN, ARROW, YELLOW = (
+    TrafficLightObservation.STATE_RED,
+    TrafficLightObservation.STATE_GREEN,
+    TrafficLightObservation.STATE_ARROW,
+    TrafficLightObservation.STATE_YELLOW,
+)
+LAMP_RED, LAMP_YELLOW, LAMP_GREEN, LAMP_ARROW = (
+    TrafficLightObservation.LAMP_RED,
+    TrafficLightObservation.LAMP_YELLOW,
+    TrafficLightObservation.LAMP_GREEN,
+    TrafficLightObservation.LAMP_ARROW,
+)
+
+
+def test_light_numeric_id_is_the_trailing_number_of_the_map_id() -> None:
+    assert light_numeric_id("traffic_light_manual_305") == 305
+    assert light_numeric_id("traffic_light_manual_142") == 142
+    assert light_numeric_id("no_digits") is None
+
+
+def test_gateway_reads_the_light_perception_names_for_the_route() -> None:
+    off_route = observed(143, RED, LAMP_RED, confidence=1.0)
+    on_route = observed(142, GREEN, LAMP_GREEN)
+
+    distance, state, confidence, arrow_active = summarize(off_route, on_route)
 
     assert distance == 8.0
     assert state == SceneSummary.TRAFFIC_GREEN
     assert confidence == 0.9
+    assert arrow_active is False
 
 
-def test_gateway_preserves_green_plus_arrow_as_route_go_signal() -> None:
-    gateway = make_gateway()
-    observations = TrafficLightObservationArray()
-    light = TrafficLightObservation()
-    light.position = point(14.0, 1.0)
-    light.state = TrafficLightObservation.STATE_ARROW
-    light.green_score = 0.9
-    light.arrow_score = 0.95
-    light.confidence = 0.9
-    observations.lights = [light]
-
-    _, state, _ = gateway.summarize_traffic_control(observations, mapped_route())
-
+def test_gateway_takes_the_most_confident_observation_of_the_light() -> None:
+    _, state, confidence, _ = summarize(observed(142, RED, LAMP_RED, 0.4), observed(142, GREEN, LAMP_GREEN, 0.8))
     assert state == SceneSummary.TRAFFIC_GREEN
+    assert confidence == 0.8
 
 
-def test_gateway_maps_red_plus_arrow_to_zone_interpreted_arrow() -> None:
-    gateway = make_gateway()
-    observations = TrafficLightObservationArray()
-    light = TrafficLightObservation()
-    light.position = point(14.0, 1.0)
-    light.state = TrafficLightObservation.STATE_RED
-    light.red_score = 0.9
-    light.arrow_score = 0.9
-    light.confidence = 0.9
-    observations.lights = [light]
-
-    _, state, _ = gateway.summarize_traffic_control(observations, mapped_route())
-
-    assert state == SceneSummary.TRAFFIC_ARROW
-
-
-def test_gateway_keeps_yellow_as_stop_for_composite_signal() -> None:
-    gateway = make_gateway()
-    observations = TrafficLightObservationArray()
-    light = TrafficLightObservation()
-    light.position = point(14.0, 1.0)
-    light.state = TrafficLightObservation.STATE_ARROW
-    light.yellow_score = 0.9
-    light.arrow_score = 0.9
-    light.confidence = 0.9
-    observations.lights = [light]
-
-    _, state, _ = gateway.summarize_traffic_control(observations, mapped_route())
-
-    assert state == SceneSummary.TRAFFIC_YELLOW
+def test_gateway_uses_perception_state_and_lamps_as_they_are() -> None:
+    # Perception decides state and lamps; the gateway reads them without scores.
+    for state, lamps, scene_state, arrow in (
+        (GREEN, LAMP_GREEN | LAMP_ARROW, SceneSummary.TRAFFIC_GREEN, True),
+        (ARROW, LAMP_RED | LAMP_ARROW, SceneSummary.TRAFFIC_ARROW, True),
+        (YELLOW, LAMP_YELLOW | LAMP_ARROW, SceneSummary.TRAFFIC_YELLOW, True),
+        (RED, LAMP_RED, SceneSummary.TRAFFIC_RED, False),
+        (TrafficLightObservation.STATE_UNKNOWN, 0, SceneSummary.TRAFFIC_UNKNOWN, False),
+    ):
+        light = observed(142, state, lamps)
+        light.red_score = light.green_score = 0.99  # ignored
+        _, light_state, _, arrow_active = summarize(light)
+        assert (light_state, arrow_active) == (scene_state, arrow)
 
 
 def test_gateway_preserves_mapped_stopline_when_signal_is_not_observed() -> None:
     gateway = make_gateway()
-    distance, state, confidence = gateway.summarize_traffic_control(
+    distance, state, confidence, arrow_active = gateway.summarize_traffic_control(
         None, mapped_route()
     )
 
     assert distance == 8.0
     assert state == SceneSummary.TRAFFIC_UNKNOWN
     assert confidence == 0.0
+    assert arrow_active is False
 
 
-def test_gateway_rejects_observation_far_from_mapped_signal() -> None:
-    gateway = make_gateway()
-    observations = TrafficLightObservationArray()
-    light = TrafficLightObservation()
-    light.position = point(14.0, 5.0)
-    light.state = TrafficLightObservation.STATE_RED
-    observations.lights = [light]
-
-    distance, state, confidence = gateway.summarize_traffic_control(
-        observations, mapped_route()
-    )
-
-    assert distance == 8.0
-    assert state == SceneSummary.TRAFFIC_UNKNOWN
-    assert confidence == 0.0
+def test_gateway_ignores_lights_perception_did_not_match_to_the_route() -> None:
+    for track_id in (0, 143):  # unassociated, another map light
+        distance, state, confidence, arrow_active = summarize(observed(track_id, RED, LAMP_RED))
+        assert distance == 8.0
+        assert state == SceneSummary.TRAFFIC_UNKNOWN
+        assert confidence == 0.0
+        assert arrow_active is False
 
 
 def test_gateway_has_no_control_without_mapped_regulatory_element() -> None:
@@ -245,10 +235,11 @@ def test_gateway_has_no_control_without_mapped_regulatory_element() -> None:
     route = RouteContext()
     route.route_projection_valid = True
 
-    distance, state, confidence = gateway.summarize_traffic_control(
+    distance, state, confidence, arrow_active = gateway.summarize_traffic_control(
         TrafficLightObservationArray(), route
     )
 
     assert distance == 1.0e6
     assert state == SceneSummary.TRAFFIC_UNKNOWN
     assert confidence == 0.0
+    assert arrow_active is False

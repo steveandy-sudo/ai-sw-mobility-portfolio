@@ -1,0 +1,37 @@
+# Stopped at red, the light turns "go" 2 s after the stop and is not seen again once the car
+# rolls (D4): launch, pass, and never stop or brake again for this event.
+# F3 and Q4 allow 3.3 m: their brake_margin_m (F3 3.25 for light 305 visibility, Q4 3.20) is kept
+# on purpose (owner, 2026-10-16).
+name: ${ev.tag}_v${speed}_${brake.tag}
+description: red then green after a stop launches once and does not stop again, light unseen while rolling
+course: ${ev.course}
+speed_mps: ${speed}
+event: ${ev.id}
+start: {distance_before_line_m: "${ev.start}", speed_mps: "${speed}"}
+vehicle: {brake_decel_mps2: "${brake.decel}"}
+duration_s: 22
+world:
+  other_lights: [{lamps: [green]}]
+  event_lights:
+    - {lamps: [red]}
+    - {stopped_for_s: 2.0, lamps: "${ev.go}"}
+    - {moving_for_s: 1.0, unseen: true}
+expect:
+  - {check: stop_count, event: "${ev.id}", count: 1}
+  - {check: stop_position, event: "${ev.id}", front_gap_m: "${ev.${brake.window}}"}
+  - {check: launch_after, after: {light: event, step: 1}, max_delay_s: 3.0}
+  - {check: brake_count, event: "${ev.id}", from: {stop: 1, event: "${ev.id}", at: end}, count: 0}
+  - {check: passes_line, event: "${ev.id}"}
+matrix:
+  ev:
+    - {tag: F1, course: final, start: 45, id: Z1_SIGNAL_OBEY, go: [green], window_b39: [0, 3], window_b77: [0, null]}
+    - {tag: F2, course: final, start: 45, id: Z2_SIGNAL_OBEY, go: [green], window_b39: [0, 3], window_b77: [0, null]}
+    - {tag: F3, course: final, start: 45, id: Z3_SIGNAL_OBEY, go: [red, arrow], window_b39: [0, 3.3], window_b77: [0, null]}
+    - {tag: F4, course: final, start: 45, id: Z4_SIGNAL_OBEY, go: [red, arrow], window_b39: [0, 3], window_b77: [0, null]}
+    - {tag: F5, course: final, start: 45, id: Z5_SIGNAL_OBEY, go: [green], window_b39: [0, null], window_b77: [0, null]}
+    - {tag: Q2, course: qualifying, start: 36, id: Z2_SIGNAL_OBEY, go: [green], window_b39: [0, 3], window_b77: [0, null]}
+    - {tag: Q4, course: qualifying, start: 36, id: Z4_SIGNAL_OBEY, go: [green], window_b39: [0, 3.3], window_b77: [0, null]}
+  speed: [7, 8]
+  brake:
+    - {tag: b39, decel: 3.9, window: window_b39}
+    - {tag: b77, decel: 7.7, window: window_b77}

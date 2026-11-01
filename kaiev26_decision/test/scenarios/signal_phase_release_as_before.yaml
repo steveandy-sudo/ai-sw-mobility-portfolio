@@ -1,0 +1,35 @@
+# Stopped at red at an arrow event, pv26 then reads red + arrow. Without an aligned phase estimate
+# that forbids it the release is today's: 0.4 s confirmation, launch, pass, no brake again (D4).
+# no_tracker: no phase estimate at all (the false arrow of F3/F4 then crosses on red, which is the
+# behaviour the estimate block exists for). unaligned: the estimate is not aligned. permits: a
+# true arrow and an aligned estimate that permits. The harness publishes the phase estimate in
+# place of the tracker node.
+name: ${ev.tag}_${spt.tag}
+description: a permitted reading while stopped releases as before unless an aligned estimate forbids it
+course: final
+speed_mps: 8
+event: ${ev.id}
+start: {distance_before_line_m: 45, speed_mps: 8}
+duration_s: 22
+world:
+  other_lights: [{lamps: [green]}]
+  event_lights:
+    - {lamps: [red]}
+    - {stopped_for_s: 2.0, lamps: [red, arrow]}
+  event_phases: "${spt.phases}"
+expect:
+  - {check: stop_count, event: "${ev.id}", count: 1}
+  - {check: launch_after, after: {light: event, step: 1}, min_delay_s: 0.4, max_delay_s: 3.0}
+  - {check: brake_count, event: "${ev.id}", from: {stop: 1, event: "${ev.id}", at: end}, count: 0}
+  - {check: passes_line, event: "${ev.id}"}
+matrix:
+  ev:
+    - {tag: F3, id: Z3_SIGNAL_OBEY}
+    - {tag: F4, id: Z4_SIGNAL_OBEY}
+  spt:
+    - {tag: no_tracker, phases: [{unpublished: true}]}
+    - {tag: unaligned, phases: [{aligned: false, permitted: false}]}
+    - tag: permits
+      phases:
+        - {aligned: true, permitted: false}
+        - {stopped_for_s: 2.0, aligned: true, permitted: true, until_change_s: 30.0}

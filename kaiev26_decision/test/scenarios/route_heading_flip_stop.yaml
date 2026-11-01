@@ -1,0 +1,22 @@
+# The localization heading turns 180 deg while the car stands at a stop line and turns back as it
+# pulls away (2026-10-17 09:28: Q1 from 157.7 s to 162.5 s, the projection went 72 m off and
+# invalid and the car never left the line). The car leaves as it does without the flip.
+name: ${ev.tag}
+description: heading flip while stopped at a timed stop does not hold the car at the line
+course: qualifying
+speed_mps: 8
+event: ${ev.id}
+start: {distance_before_line_m: 45, speed_mps: 8}
+duration_s: 20
+world:
+  other_lights: [{lamps: [green]}]
+  heading_flips:
+    - {start: {stopped_for_s: 0.5}, end: {moving_for_s: 0.0}}
+expect:
+  - {check: stop_count, event: "${ev.id}", count: 1}
+  - {check: launch_after, after: {stop: 1, event: "${ev.id}"}, min_delay_s: 3.0, max_delay_s: 6.0}
+  - {check: passes_line, event: "${ev.id}"}
+matrix:
+  ev:
+    - {tag: Q1, id: Z1_TIMED_STOP}
+    - {tag: Q3, id: Z3_TIMED_STOP}

@@ -1,0 +1,90 @@
+# Two rules of the signal schedule that hold only while the car stands at its event, kept from the
+# real-car change of 2026-10-17 (kty 17d49de) when the schedule became the signal input
+# (signal_schedule.py):
+# - A scheduled permission launches the car from a stop only when sure: permission probability
+#   at least 0.9 and at least 4 s of it left. Otherwise the camera decides.
+# - The schedule holds back a permission the camera reads for at most 100 s (one program cycle)
+#   per stop; then the camera decides for the rest of the approach.
+# Stopped at red each time. F4 (375) keeps reading red, which its arrow phase also lights, so only
+# the schedule can launch the car. F3 (305) goes unseen (UNKNOWN), where the 110 s UNKNOWN release
+# is the only other way out. The withhold cases read red + arrow (a false arrow at 305 and 375)
+# against a schedule that stays red.
+# The harness publishes the phase estimate in place of the tracker node.
+name: ${ev.tag}
+description: stopped at the line, a scheduled permission launches only when sure and holds back the camera for at most 100 s
+course: final
+speed_mps: 8
+event: ${ev.id}
+start: {distance_before_line_m: 45, speed_mps: 8}
+duration_s: "${ev.duration}"
+world:
+  other_lights: [{lamps: [green]}]
+  event_lights: "${ev.lights}"
+  event_phases: "${ev.phases}"
+expect: "${ev.expect}"
+matrix:
+  ev:
+    - tag: F4_unsure_permission_holds
+      id: Z4_SIGNAL_OBEY
+      duration: 22
+      lights: [{lamps: [red]}]
+      phases:
+        - {aligned: true, permitted: false, until_change_s: 30.0, lamps: [red]}
+        - {stopped_for_s: 2.0, aligned: true, permitted: true, probability: 0.6, until_change_s: 30.0, lamps: [red, arrow]}
+      expect:
+        - {check: stop_count, event: Z4_SIGNAL_OBEY, count: 1}
+        - {check: no_motion, from: {stop: 1, event: Z4_SIGNAL_OBEY}}
+    - tag: F4_ending_permission_holds
+      id: Z4_SIGNAL_OBEY
+      duration: 22
+      lights: [{lamps: [red]}]
+      phases:
+        - {aligned: true, permitted: false, until_change_s: 30.0, lamps: [red]}
+        - {stopped_for_s: 2.0, aligned: true, permitted: true, until_change_s: 2.5, lamps: [red, arrow]}
+      expect:
+        - {check: stop_count, event: Z4_SIGNAL_OBEY, count: 1}
+        - {check: no_motion, from: {stop: 1, event: Z4_SIGNAL_OBEY}}
+    - tag: F3_unknown_sure_permission_launches
+      id: Z3_SIGNAL_OBEY
+      duration: 24
+      lights: [{lamps: [red]}, {stopped_for_s: 2.0, unseen: true}]
+      phases:
+        - {aligned: true, permitted: false, until_change_s: 30.0, lamps: [red]}
+        - {stopped_for_s: 2.0, aligned: true, permitted: true, until_change_s: 30.0, lamps: [green, arrow]}
+      expect:
+        - {check: stop_count, event: Z3_SIGNAL_OBEY, count: 1}
+        - {check: launch_after, after: {phase: event, step: 1}, min_delay_s: 1.0, max_delay_s: 3.0}
+        - {check: brake_count, event: Z3_SIGNAL_OBEY, from: {stop: 1, event: Z3_SIGNAL_OBEY, at: end}, count: 0}
+        - {check: passes_line, event: Z3_SIGNAL_OBEY}
+    - tag: F3_unknown_unsure_permission_holds
+      id: Z3_SIGNAL_OBEY
+      duration: 22
+      lights: [{lamps: [red]}, {stopped_for_s: 2.0, unseen: true}]
+      phases:
+        - {aligned: true, permitted: false, until_change_s: 30.0, lamps: [red]}
+        - {stopped_for_s: 2.0, aligned: true, permitted: true, probability: 0.6, until_change_s: 30.0, lamps: [green, arrow]}
+      expect:
+        - {check: stop_count, event: Z3_SIGNAL_OBEY, count: 1}
+        - {check: no_motion, from: {stop: 1, event: Z3_SIGNAL_OBEY}}
+    - tag: F4_withhold_ends_at_100s
+      id: Z4_SIGNAL_OBEY
+      duration: 128
+      lights: [{lamps: [red]}, {stopped_for_s: 2.0, lamps: [red, arrow]}]
+      phases:
+        - {aligned: true, permitted: false, until_change_s: 300.0, lamps: [red]}
+      expect:
+        - {check: stop_count, event: Z4_SIGNAL_OBEY, count: 1}
+        - {check: no_motion, from: {stop: 1, event: Z4_SIGNAL_OBEY}, to: {light: event, step: 1, plus_s: 99.0}}
+        - {check: launch_after, after: {light: event, step: 1}, min_delay_s: 100.0, max_delay_s: 102.0}
+        - {check: passes_line, event: Z4_SIGNAL_OBEY}
+    - tag: F3_withhold_ends_at_100s
+      id: Z3_SIGNAL_OBEY
+      duration: 128
+      lights: [{lamps: [red]}, {stopped_for_s: 2.0, lamps: [red, arrow]}]
+      phases:
+        - {aligned: true, permitted: false, until_change_s: 300.0, lamps: [red]}
+      expect:
+        - {check: stop_count, event: Z3_SIGNAL_OBEY, count: 1}
+        - {check: no_motion, from: {stop: 1, event: Z3_SIGNAL_OBEY}, to: {light: event, step: 1, plus_s: 99.0}}
+        - {check: launch_after, after: {light: event, step: 1}, min_delay_s: 100.0, max_delay_s: 102.0}
+        - {check: passes_line, event: Z3_SIGNAL_OBEY}

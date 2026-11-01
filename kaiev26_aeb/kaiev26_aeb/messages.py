@@ -1,13 +1,11 @@
-"""ROS input decoding and output construction used in both live and offline runs."""
+"""ROS messages for cone path, status, and tracking visualization."""
 import json
 import math
 
 import numpy as np
-from scipy.spatial.transform import Rotation
 from builtin_interfaces.msg import Time, Duration
 from std_msgs.msg import Header, String
 from geometry_msgs.msg import Point, PoseStamped, PoseArray, Pose
-from sensor_msgs.msg import PointCloud2, PointField, CompressedImage
 from nav_msgs.msg import Path
 from visualization_msgs.msg import Marker, MarkerArray
 
@@ -18,53 +16,6 @@ def stamp_ns(header):
 
 def header(stamp, frame):
     return Header(stamp=Time(sec=int(stamp // 10**9), nanosec=int(stamp % 10**9)), frame_id=frame)
-
-
-def transform_matrix(transform):
-    t, q = transform.translation, transform.rotation
-    out = np.eye(4)
-    out[:3, :3] = Rotation.from_quat([q.x, q.y, q.z, q.w]).as_matrix()
-    out[:3, 3] = [t.x, t.y, t.z]
-    return out
-
-
-def camera_info(msg):
-    if msg.width <= 0 or msg.height <= 0 or msg.k[0] <= 0 or msg.k[4] <= 0:
-        raise ValueError('CameraInfo is not calibrated')
-    if (msg.binning_x not in (0, 1) or msg.binning_y not in (0, 1)
-            or msg.roi.x_offset or msg.roi.y_offset):
-        raise ValueError('Binned/cropped CameraInfo requires adjusted intrinsics')
-    return {'width': msg.width, 'height': msg.height, 'k': list(msg.k), 'd': list(msg.d),
-            'distortion_model': msg.distortion_model, 'frame': msg.header.frame_id}
-
-
-def cloud_xyz(msg):
-    fields = {f.name: f for f in msg.fields}
-    if not all(n in fields and fields[n].datatype in (7, 8) and fields[n].count == 1 for n in ('x', 'y', 'z')):
-        raise ValueError('PointCloud2 needs scalar FLOAT32/FLOAT64 x, y, z fields')
-    if msg.row_step < msg.width * msg.point_step or len(msg.data) < msg.height * msg.row_step:
-        raise ValueError('Truncated PointCloud2')
-    endian = '>' if msg.is_bigendian else '<'
-    dtype = np.dtype({'names': ['x', 'y', 'z'],
-                      'formats': [endian + ('f4' if fields[n].datatype == 7 else 'f8') for n in ('x', 'y', 'z')],
-                      'offsets': [fields[n].offset for n in ('x', 'y', 'z')], 'itemsize': msg.point_step})
-    data = np.ndarray((msg.height, msg.width), dtype=dtype, buffer=bytes(msg.data),
-                      strides=(msg.row_step, msg.point_step))
-    return np.column_stack([data[n].ravel() for n in ('x', 'y', 'z')])
-
-
-def cloud_message(points, stamp, frame):
-    points = np.asarray(points, dtype='<f4').reshape(-1, 3)
-    msg = PointCloud2(header=header(stamp, frame), height=1, width=len(points),
-                      is_bigendian=False, point_step=12, row_step=12 * len(points), is_dense=True)
-    msg.fields = [PointField(name=n, offset=i * 4, datatype=PointField.FLOAT32, count=1)
-                  for i, n in enumerate(('x', 'y', 'z'))]
-    msg.data = points.tobytes()
-    return msg
-
-
-def image_message(encoded, stamp, frame):
-    return CompressedImage(header=header(stamp, frame), format='jpeg', data=bytes(encoded))
 
 
 def predicted_path_marker(result, wheelbase_m, hdr):
@@ -79,7 +30,7 @@ def predicted_path_marker(result, wheelbase_m, hdr):
     marker.scale.x = .09
     marker.color.r, marker.color.g, marker.color.b, marker.color.a = 1.0, .15, .85, 1.0
     marker.lifetime = Duration(sec=0, nanosec=500_000_000)
-    if not result['tracking'] or result['brake_engage']:
+    if not result['tracking']:
         return marker
     length = result.get('lookahead_m') or 7.0  # Stanley visualization only, not control preview.
     curvature = math.tan(result['steering_target_rad']) / wheelbase_m
@@ -98,7 +49,8 @@ def public_result(result):
     return {**{k: v for k, v in plan.items() if k != 'path'},
             'path_points': len(plan['path']),
             'cones': [{'xyz': c['xyz'].tolist(), 'color': c['color'], 'side': c['side'],
-                       'score': c['score'], 'lidar_points': len(c['indices']), 'matches': c['matches']}
+                       'score': c['score'], 'lidar_points': len(c['indices']), 'matches': c['matches'],
+                       **({'size_xy': c['size_xy'].tolist()} if 'size_xy' in c else {})}
                       for c in result['cones']]}
 
 

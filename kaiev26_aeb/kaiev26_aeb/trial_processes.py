@@ -28,19 +28,39 @@ RECORD_TOPICS = (
     '/aeb/center_path', '/aeb/cones', '/aeb/boundaries', '/aeb/status',
     '/aeb/red_gate', '/aeb/control_command', '/aeb/tracking_status',
     '/aeb/pursuit_target', '/aeb/predicted_path',
-    '/aeb/left/image/compressed', '/aeb/right/image/compressed', '/aeb/points',
+    '/perception/cone/detections', '/perception/cone/markers',
     '/perception/camera/left/source/camera_info',
     '/perception/camera/left/source/image_raw/compressed',
     '/perception/camera/right/source/camera_info',
     '/perception/camera/right/source/image_raw/compressed',
     '/ouster/imu_packets', '/ouster/lidar_packets', '/ouster/metadata',
     '/tf', '/tf_static', '/diagnostics',
+    # Vehicle response and steering actuator detail for the tracker analysis.
+    '/vehicle/wheel_twist', '/imu/data',
+    '/steering/actuation_mode', '/steering/requested_angle', '/steering/angle_error',
+    '/steering/rate', '/steering/torque_command_raw', '/steering/torque_current_limit_command_a',
+    '/steering/torque_saturated', '/steering/torque_peak_limited', '/steering/torque_safety',
+    '/rosout', '/parameter_events',
 )
+
+
+def stanley_document(settings):
+    """The shared Stanley values the trial runs with (read from motion_control.yaml), or why
+    they could not be read; None for Pure Pursuit."""
+    if settings.profile.controller != 'stanley':
+        return None
+    try:
+        from .stanley import motion_control_defaults, motion_control_yaml_path
+        path = motion_control_yaml_path()
+        return {'source': str(path), **motion_control_defaults(path)}
+    except Exception as error:  # Recording must not fail on it; the reason is kept instead.
+        return {'error': str(error)}
 
 RECORDER_CODE = """
 import json, sys
 import rosbag2_py
-storage = rosbag2_py.StorageOptions(uri=sys.argv[1], storage_id='mcap')
+storage = rosbag2_py.StorageOptions(
+    uri=sys.argv[1], storage_id='mcap', storage_preset_profile='zstd_fast')
 options = rosbag2_py.RecordOptions()
 options.topics = json.loads(sys.argv[2])
 options.rmw_serialization_format = 'cdr'
@@ -106,13 +126,15 @@ class ProcessManager:
 
     @staticmethod
     def launch_argv(settings) -> list[str]:
-        return [
+        argv = [
             'ros2', 'launch', 'kaiev26_aeb', 'aeb_test.launch.py',
             f'scenario:={settings.scenario}', 'use_sim_time:=false',
             'enabled:=false', 'command_topic:=/planning/command',
             f'target_speed_kph:={settings.target_speed_kph:g}',
-            f'model_path:={settings.model_path}',
+            f'red_brake_lead_m:={settings.red_brake_lead_m:g}',
+            f"vehicle_brake:={'false' if settings.estop_use else 'true'}",
         ]
+        return argv
 
     def start(self):
         self.thread.start()
@@ -151,6 +173,7 @@ class ProcessManager:
         self.document.update({
             'started_at': datetime.now(ZoneInfo('Asia/Seoul')).isoformat(),
             'topics': list(RECORD_TOPICS),
+            'stanley_config': stanley_document(settings),
         })
         self._save_document()
         self.recorder = OwnedProcess('MCAP', [
@@ -163,7 +186,8 @@ class ProcessManager:
             self.recorder.stop()
             self.recorder = None
             raise
-        self._log(f'{settings.profile.name} 준비 · 최고 목표 {settings.target_speed_kph:g} km/h')
+        self._log(f'{settings.profile.name} 준비 · 최고 목표 {settings.target_speed_kph:g} km/h'
+                  f" · E-stop {'USE' if settings.estop_use else 'NOT-USE'}")
         self.event_sink(('process_started', str(self.run_dir)))
 
     def _metadata(self):

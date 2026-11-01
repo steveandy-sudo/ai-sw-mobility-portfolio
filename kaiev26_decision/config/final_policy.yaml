@@ -5,6 +5,14 @@ source:
   map: square_intersection_gazebo_map
   route: kcity_final_route.yaml
 
+# brake_margin_m (2026-10-15): front-bumper margin before the stop line on top of d_stop(v).
+# The line is the painted line of the map semantics (final_landmarks.yaml, map_semantics); the
+# margins grew by the 0.7-0.9 m the old landmark copies sat before it, so the stop targets stayed
+# where they were, except F5. Gazebo stops 0.1-0.7 m closer than the margin.
+# F3 keeps about 3 m: Gazebo lost light 305 at 1.5 m.
+# F5 uses 7.5 m: head 322 hangs 2.2 m beyond the line at the top edge of the right camera. In four
+# real passes (9/19, 9/20) PV26 kept it in every epoch only with the front bumper 6.5 m or more
+# before the line and never within 4 m (docs/reports/2026-10-15_decision_review/sim_real_compare.md).
 stages:
   - id: F_STAGE_1
     traffic_light_enabled: true
@@ -14,12 +22,13 @@ stages:
       id: Z1_SIGNAL_OBEY
       type: SIGNAL_OBEY
       stop_line_id: stop_line_manual_052
-      brake_trigger_waypoint: 98
-      brake_trigger_route_s: 97.984659
+      brake_trigger_waypoint: 120
+      brake_trigger_route_s: 119.896962843
+      brake_margin_m: 2.15
       traffic_light_ids: [traffic_light_manual_142]
       arrow_maneuver: NONE
       approach_distance_m: 30.0
-      commit_distance_m: 6.0
+      commit_distance_m: 8.0
 
   - id: F_STAGE_2
     traffic_light_enabled: true
@@ -29,12 +38,13 @@ stages:
       id: Z2_SIGNAL_OBEY
       type: SIGNAL_OBEY
       stop_line_id: stop_line_manual_057
-      brake_trigger_waypoint: 153
-      brake_trigger_route_s: 152.983564
+      brake_trigger_waypoint: 165
+      brake_trigger_route_s: 164.894685309
+      brake_margin_m: 1.75
       traffic_light_ids: [traffic_light_manual_143]
       arrow_maneuver: NONE
       approach_distance_m: 30.0
-      commit_distance_m: 6.0
+      commit_distance_m: 8.0
 
   - id: F_STAGE_3
     traffic_light_enabled: true
@@ -44,12 +54,13 @@ stages:
       id: Z3_SIGNAL_OBEY
       type: SIGNAL_OBEY
       stop_line_id: stop_line_manual_209
-      brake_trigger_waypoint: 289
-      brake_trigger_route_s: 288.980038
+      brake_trigger_waypoint: 302
+      brake_trigger_route_s: 301.896710481
+      brake_margin_m: 3.25
       traffic_light_ids: [traffic_light_manual_305]
       arrow_maneuver: LEFT
       approach_distance_m: 30.0
-      commit_distance_m: 6.0
+      commit_distance_m: 8.0
 
   - id: F_STAGE_4
     traffic_light_enabled: true
@@ -59,12 +70,13 @@ stages:
       id: Z4_SIGNAL_OBEY
       type: SIGNAL_OBEY
       stop_line_id: stop_line_manual_214
-      brake_trigger_waypoint: 346
-      brake_trigger_route_s: 345.973057
+      brake_trigger_waypoint: 356
+      brake_trigger_route_s: 355.889733627
+      brake_margin_m: 2.35
       traffic_light_ids: [traffic_light_manual_375]
       arrow_maneuver: LEFT
       approach_distance_m: 30.0
-      commit_distance_m: 6.0
+      commit_distance_m: 8.0
 
   - id: F_STAGE_5
     traffic_light_enabled: true
@@ -74,16 +86,71 @@ stages:
       id: Z5_SIGNAL_OBEY
       type: SIGNAL_OBEY
       stop_line_id: stop_line_manual_221
-      brake_trigger_waypoint: 448
-      brake_trigger_route_s: 447.963912
+      brake_trigger_waypoint: 454
+      brake_trigger_route_s: 453.879784020
+      brake_margin_m: 7.5
       traffic_light_ids: [traffic_light_manual_322]
       arrow_maneuver: NONE
-      approach_distance_m: 30.0
-      commit_distance_m: 6.0
+      # 7.5 m margin: at 10 m/s braking starts 29.3 m before the line, so the window is longer.
+      approach_distance_m: 40.0
+      commit_distance_m: 8.0
 
+  # course_speed_mps (2026-10-24): no signal from the F5 line to the finish, so this stage runs at
+  # 13 m/s in place of the TUI speed (fsm FINAL_SPRINT). The curve caps (F3, F4), the obstacle zone
+  # pre-slow and cap and the finish stop still apply below it.
   - id: F_STAGE_6
     traffic_light_enabled: false
     obstacle_enabled: true
+    course_speed_mps: 13.0
     event:
       id: Z6_FINISH
       type: FINISH
+      # Painted start/finish line, surveyed 2026-10-25 with the GNSS antenna on it (RTK FIX,
+      # NARROW_INT): records/start_line in the start lane, records/final_line in the finish lane.
+      # The route crosses the line through the two points at finish_line_route_s (85.7 deg). The
+      # course speed holds until the antenna is finish_line_pass_margin_m past the line, then the
+      # car brakes and stops on the route extension (decision_pipeline.yaml finish_line_*).
+      finish_line_route_s: 731.928705
+      finish_line_points:
+        - {latitude_deg: 37.238943406, longitude_deg: 126.772968818}
+        - {latitude_deg: 37.238965823, longitude_deg: 126.772923934}
+
+# Obstacle zone (D14, 2026-10-16; extent set by kgm on 2026-10-16): road surface of both lanes from
+# route WP 640 to WP 670 (0-based) of kcity_final_route.yaml, route s 639.849-669.840 m, map frame.
+# The mission 8 drum rows stand at route s 656 and 662 m. The right edge runs 2.3 m right of the
+# route (white edge line about 1.9 m), the left edge 6.3 m left (yellow centre line about 2.1 m plus
+# the 4.1 m opposite lane). The start and end vertex pairs are perpendicular to the route at the two
+# waypoints, with one more pair at route s 655 m (the 15 m grid of the earlier polygon); the route is
+# straight there. The route also drives this road in the opposite lane at the start (route s 0-130 m);
+# the zone is the last pass through the polygon. The obstacle behavior ignores objects outside it.
+# Inside, the lane limits are the surveyed lines below, projected on the route; points farther than
+# boundary_max_offset_m from the route (the side-road curb returns of 042 and 268 near 628-636 m)
+# are left out, and the gap between the pieces is interpolated.
+# End (D18): a bypass may start at the zone end and needs obstacle_return_length_m (12 m) to rejoin,
+# which must end before the finish brake point (733.5 m, the antenna 2.0 m past the surveyed
+# line; Z6_FINISH), or
+# Decision refuses to start: 669.8 + 12 = 681.8 m.
+# start_route_s (D10): the speed cap starts at WP 640 (0-based), the cumulative route s of
+# kcity_final_route.yaml (total 752.386 m since the finish extensions of 2026-10-24/25, 15 + 10 m), the same
+# station as the polygon start edge.
+# Speed (D10): speed_cap_mps from the front bumper at start_route_s until the car is past the zone
+# end and a committed bypass is back on the route (its return point); then the normal course speed.
+# Before it the cap falls at pre_slow_decel_mps2 so the front bumper enters at the cap by coasting
+# alone; it only lowers the target and never brakes.
+# 0.5 m/s^2 is the measured deceleration without drive or brake (10월 미단 0.4~0.7).
+obstacle_zone:
+  start_route_s: 639.849483634
+  speed_cap_mps: 5.0
+  pre_slow_decel_mps2: 0.5
+  map_semantics: package://kaiev26_maps/maps/kcity/kcity_course_semantics.yaml
+  boundary_max_offset_m: 3.0
+  lane_boundaries:
+    right: [lane_marking_manual_042, lane_marking_manual_268, lane_marking_manual_325]
+    left: [lane_marking_manual_005, lane_marking_manual_013, lane_marking_manual_323]
+  polygon:
+    - {x: -32.517, y: -49.776}
+    - {x: -39.579, y: -63.180}
+    - {x: -46.496, y: -76.310}
+    - {x: -38.888, y: -80.318}
+    - {x: -31.970, y: -67.189}
+    - {x: -24.908, y: -53.785}

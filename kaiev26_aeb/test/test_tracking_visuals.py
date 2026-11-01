@@ -29,10 +29,18 @@ def test_prediction_matches_independent_bicycle_integration(steering):
     assert np.linalg.norm(np.diff(points, axis=0), axis=1).sum() == pytest.approx(7.0, abs=.001)
 
 
-@pytest.mark.parametrize('tracking,brake', [(False, True), (True, True), (False, False)])
-def test_inactive_or_braking_deletes_previous_prediction(tracking, brake):
+@pytest.mark.parametrize('tracking,brake', [(False, True), (False, False)])
+def test_inactive_tracking_deletes_previous_prediction(tracking, brake):
     marker = predicted_path_marker(dict(tracking=tracking, brake_engage=brake),
                                    1.3, header(0, 'base_link'))
     assert marker.action == Marker.DELETE
     assert not marker.points
     assert marker.lifetime.nanosec == 500_000_000
+
+
+def test_braking_centerline_tracking_keeps_prediction_visible():
+    marker = predicted_path_marker(
+        dict(tracking=True, brake_engage=True, lookahead_m=7.0, steering_target_rad=0.1),
+        1.3, header(0, 'base_link'))
+    assert marker.action == Marker.ADD
+    assert marker.points

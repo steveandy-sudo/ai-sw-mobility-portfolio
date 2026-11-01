@@ -1,4 +1,6 @@
 from pathlib import Path
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 import yaml
 
@@ -61,6 +63,39 @@ def test_default_and_today_selection_accept_multiple_runs(tmp_path: Path) -> Non
     second = make_run(tmp_path, "20260912_100100_decision_case_01_stanley_v6")
     assert select_runs([], tmp_path) == [first, second]
     assert select_runs(["latest"], tmp_path) == [second]
+
+
+def test_old_and_compact_names_are_sorted_by_run_time(tmp_path: Path) -> None:
+    earlier = make_run(tmp_path, '261020_1400_decision_case01_final_V10')
+    later = make_run(tmp_path, '20261021_140000_decision_case_01_final_all_v10')
+    assert decision_runs(tmp_path) == [earlier, later]
+    assert select_runs(['latest'], tmp_path) == [later]
+
+
+def test_started_at_orders_compact_runs_within_the_same_minute(tmp_path: Path) -> None:
+    later = make_run(tmp_path, '261021_1400_decision_case01_final_V10')
+    earlier = make_run(tmp_path, '261021_1400_decision_case02_final_V10')
+    for run,stamp in [(earlier, '2026-10-21T14:00:01+09:00'),
+                      (later, '2026-10-21T14:00:59+09:00')]:
+        scenario = yaml.safe_load((run / 'scenario.yaml').read_text())
+        scenario['started_at'] = stamp
+        (run / 'scenario.yaml').write_text(yaml.safe_dump(scenario))
+    assert select_runs(['latest'], tmp_path) == [later]
+
+
+def test_today_selection_accepts_old_and_compact_names(tmp_path: Path, monkeypatch) -> None:
+    from kaiev26_export import cli
+
+    class FixedDateTime:
+        @staticmethod
+        def now(timezone):
+            return datetime(2026, 10, 21, tzinfo=ZoneInfo('Asia/Seoul'))
+
+    monkeypatch.setattr(cli, 'datetime', FixedDateTime)
+    make_run(tmp_path, '261020_1400_decision_case01_final_V10')
+    old = make_run(tmp_path, '20261021_140000_decision_case_01_final_all_v10')
+    new = make_run(tmp_path, '261021_1500_decision_case02_final_V10')
+    assert select_runs(['today'], tmp_path) == [old, new]
 
 
 def test_export_is_atomic_and_skips_completed_output(tmp_path: Path) -> None:

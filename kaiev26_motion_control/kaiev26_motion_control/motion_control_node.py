@@ -6,20 +6,28 @@ from dataclasses import dataclass
 import math
 
 from diagnostic_msgs.msg import DiagnosticArray, DiagnosticStatus, KeyValue
-from kaiev26_msgs.msg import ActuatorCommand, Centerline, TargetSpeed, VehicleState
+from kaiev26_msgs.msg import ActuatorCommand, Centerline, RouteContext, TargetSpeed, VehicleState
 import rclpy
 from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from rclpy.time import Time as RosTime
+from rcl_interfaces.msg import ParameterDescriptor
+
+from kaiev26_motion_control.input_loss import InputLossLatch
 
 
 INF_DISTANCE = 1.0e6
 # Match lateral_ctrl's minimum drive speed for steering actuation.
 MIN_STEERING_SPEED_MPS = 1.0 / 3.6
-PURE_PURSUIT = "pure_pursuit"
-STANLEY = "stanley"
-PP_STANLEY = "pp_stanley"
-FF_STANLEY = "ff_stanley"
+# TargetSpeed constraint from Decision: a planned stop that has stood still long enough; the
+# brake servo may release while the target stays speed 0 (main_planning_engine_node).
+STANDSTILL_BRAKE_RELEASE = "STANDSTILL_BRAKE_RELEASE"
+# Paths cut from the global route, including the one carrying a stop target (stop point).
+GLOBAL_ROUTE_SOURCES = frozenset({
+    "global_route_local_path",
+    "global_route_constant_speed",
+    "longitudinal_stop_from_global_route_local_path",
+})
 
 
 @dataclass(frozen=True)
@@ -54,34 +62,127 @@ class StanleyProfile:
     curve_severity: float
 
 
-@dataclass(frozen=True)
-class StraightCorridorDecision:
-    scale: float
-    cross_track_error_m: float
-    heading_error_rad: float
-    predicted_error_m: float
-    eligible: bool = False
-
-
-def validate_lateral_controller(value: str) -> str:
-    """Normalize and validate the selected lateral controller."""
-    controller = value.strip().lower()
-    if controller in {PURE_PURSUIT, STANLEY, PP_STANLEY, FF_STANLEY}:
-        return controller
-    choices = ", ".join((PURE_PURSUIT, STANLEY, PP_STANLEY, FF_STANLEY))
-    raise ValueError(f"unknown lateral_controller '{value}'; expected one of: {choices}")
-
-
 def clamp(value: float, lower: float, upper: float) -> float:
     return max(lower, min(upper, value))
 
 
-def smoothstep_scale(value: float, lower: float, upper: float) -> float:
-    """Return a continuous 0..1 correction scale between two thresholds."""
-    if upper <= lower:
-        return 1.0 if value >= upper else 0.0
-    ratio = clamp((value - lower) / (upper - lower), 0.0, 1.0)
-    return ratio * ratio * (3.0 - 2.0 * ratio)
+def interpolate_table(value: float, points, values) -> float:
+    """Piecewise-linear lookup, flat outside the table."""
+    if not points:
+        return 0.0
+    if value <= points[0]:
+        return values[0]
+    for (a, b), (x, y) in zip(zip(points, points[1:]), zip(values, values[1:])):
+        if value < b:
+            return x + (y - x) * (value - a) / (b - a)
+    return values[-1]
+
+
+@dataclass(frozen=True)
+class SteeringCompensationConfig:
+    """Friction compensation in front of the steering actuator (2026-10-22 analysis).
+
+    The KEYA torque PD has no integral, so the wheel stops anywhere inside a friction band of
+    about ±0.85° around the target, offset about 0.37° to the left; the car runs straight with
+    the encoder about 0.45° right. The command gets neutral_offset (−0.82°) and, while the
+    encoder falls short of it, a push toward the shortfall by the friction of the current speed
+    (friction_speeds_mps → friction_rad, flat outside). Values from the 09/19~10/17 autonomous
+    logs; see reports 261022_조향액추에이터_모델_직선흔들림. After the 10/25 wheel refit and
+    alignment the car runs straight at about −0.20° and the offset is −0.52° (reports
+    261025_정렬후_좌우90도_추종기_재적합).
+    """
+
+    neutral_offset_rad: float
+    friction_speeds_mps: tuple[float, ...]
+    friction_rad: tuple[float, ...]
+    error_start_rad: float
+    error_full_rad: float
+    error_ramp_s: float
+
+
+def validate_steering_compensation(config: SteeringCompensationConfig) -> None:
+    speeds, values = config.friction_speeds_mps, config.friction_rad
+    scalars = (
+        config.neutral_offset_rad, config.error_start_rad, config.error_full_rad, config.error_ramp_s,
+    )
+    if (
+        not speeds or len(speeds) != len(values)
+        or not all(math.isfinite(v) for v in (*speeds, *values, *scalars))
+        or not all(a < b for a, b in zip(speeds, speeds[1:]))
+        or any(v < 0.0 or v > math.radians(3.0) for v in values)
+        or abs(config.neutral_offset_rad) > math.radians(3.0)
+        or min(config.error_ramp_s, config.error_start_rad) < 0.0
+        or config.error_full_rad <= config.error_start_rad
+    ):
+        raise ValueError(
+            "steering compensation needs rising friction speeds with 0..3 deg values, an offset "
+            "within 3 deg, a non-negative start error and ramp time and error_full > error_start"
+        )
+
+
+class SteeringCompensator:
+    """State of the encoder_error friction compensation."""
+
+    def __init__(self, config: SteeringCompensationConfig) -> None:
+        self.config = config
+        self.reset()
+
+    def reset(self) -> None:
+        self.friction_value_rad = 0.0
+        self.added_rad = 0.0
+
+    def friction_at(self, speed_mps: float) -> float:
+        return interpolate_table(
+            abs(speed_mps), self.config.friction_speeds_mps, self.config.friction_rad
+        )
+
+    def _ramp(self, goal: float, amount: float, ramp_s: float, dt: float) -> float:
+        if ramp_s <= 0.0 or amount <= 0.0:
+            return goal
+        step = 2.0 * amount * dt / ramp_s
+        return self.friction_value_rad + clamp(goal - self.friction_value_rad, -step, step)
+
+    def apply(self, command_rad: float, encoder_rad: float | None, speed_mps: float, dt: float) -> float:
+        """Command with the offset and friction push added; dt is the control period."""
+        config = self.config
+        dt = max(0.0, dt)
+        amount = self.friction_at(speed_mps)
+        # Push only while the encoder falls short of the target by more than the start error,
+        # fully from the full error: jitter below it is left to the actuator.
+        goal = 0.0
+        if encoder_rad is not None and math.isfinite(encoder_rad):
+            error = command_rad + config.neutral_offset_rad - encoder_rad
+            share = clamp(
+                (abs(error) - config.error_start_rad)
+                / (config.error_full_rad - config.error_start_rad), 0.0, 1.0,
+            )
+            goal = math.copysign(amount * share, error)
+        self.friction_value_rad = self._ramp(goal, amount, config.error_ramp_s, dt)
+        self.added_rad = config.neutral_offset_rad + self.friction_value_rad
+        return command_rad + self.added_rad
+
+
+def validate_route_segments(boundaries, phases, length):
+    boundaries = tuple(float(value) for value in boundaries)
+    phases = tuple(phases)
+    if not boundaries and not phases:
+        return boundaries, phases
+    if (len(boundaries) != len(phases) + 1 or not phases
+            or any(not math.isfinite(v) for v in boundaries)
+            or not math.isfinite(length) or length <= 0
+            or abs(boundaries[0]) > 1e-6 or abs(boundaries[-1] - length) > 1e-6
+            or any(b <= a for a, b in zip(boundaries, boundaries[1:]))
+            or any(p not in {'straight', 'turn_approach', 'turning',
+                             'chained_turn', 'turn_exit'} for p in phases)):
+        raise ValueError('invalid route phase table')
+    return boundaries, phases
+
+
+def route_segment_index(progress, boundaries):
+    if not math.isfinite(progress) or not boundaries or not boundaries[0] <= progress <= boundaries[-1]:
+        return -1
+    import bisect
+    return min(len(boundaries) - 2, bisect.bisect_right(boundaries, progress) - 1)
 
 
 def filtered_steering_rate(
@@ -105,56 +206,6 @@ def filtered_steering_rate(
     alpha = dt / (max(0.0, float(time_constant_s)) + dt)
     return float(previous_rate_radps) + alpha * (
         raw_rate - float(previous_rate_radps)
-    )
-
-
-def straight_corridor_decision(
-    points,
-    path_source: str,
-    phase: str,
-    speed_mps: float,
-    preview_time_s: float,
-    preview_min_m: float,
-    preview_max_m: float,
-    error_deadband_m: float,
-    error_full_m: float,
-    heading_deadband_rad: float,
-    heading_full_rad: float,
-    heading_window_m: float,
-) -> StraightCorridorDecision:
-    """Scale small straight-route corrections using projected lateral error."""
-    global_route_sources = {
-        "global_route_local_path",
-        "global_route_constant_speed",
-    }
-    if path_source not in global_route_sources or phase != "straight":
-        return StraightCorridorDecision(1.0, 0.0, 0.0, 0.0, False)
-    reference = stanley_path_reference(points, 0.0, heading_window_m)
-    if reference is None:
-        return StraightCorridorDecision(1.0, 0.0, 0.0, 0.0, False)
-    heading_error, cross_track_error, _, _ = reference
-    preview_distance = clamp(
-        abs(float(speed_mps)) * max(0.0, float(preview_time_s)),
-        max(0.0, float(preview_min_m)),
-        max(float(preview_min_m), float(preview_max_m)),
-    )
-    predicted_error = cross_track_error + preview_distance * math.sin(heading_error)
-    error_scale = smoothstep_scale(
-        abs(predicted_error),
-        max(0.0, float(error_deadband_m)),
-        max(float(error_deadband_m), float(error_full_m)),
-    )
-    heading_scale = smoothstep_scale(
-        abs(heading_error),
-        max(0.0, float(heading_deadband_rad)),
-        max(float(heading_deadband_rad), float(heading_full_rad)),
-    )
-    return StraightCorridorDecision(
-        max(error_scale, heading_scale),
-        cross_track_error,
-        heading_error,
-        predicted_error,
-        True,
     )
 
 
@@ -184,6 +235,62 @@ def blend_lateral_steering(
     return (1.0 - weight) * float(stanley_rad) + weight * float(
         pure_pursuit_rad
     )
+
+
+def scheduled_stanley_gains(
+    speed_mps: float,
+    natural_frequency_radps: float,
+    damping_ratio: float,
+    wheelbase_m: float,
+    softening_speed_mps: float,
+    minimum_speed_mps: float,
+) -> tuple[float, float]:
+    """Straight Stanley (heading, cross-track) gains that give the kinematic car the same
+    natural frequency wn and damping z at every speed.
+
+    Small angles: e'' = (v^2/L) d with d = kh*psi + ke*e_front/(v+vs) and e_front = e + L*psi,
+    so wn^2 = v^2 ke / (L (v+vs)) and 2 z wn = v (kh + ke L/(v+vs)) / L. Below
+    minimum_speed_mps the gains of that speed are kept.
+    """
+    v = max(float(minimum_speed_mps), abs(float(speed_mps)), 0.1)
+    wn = max(0.0, float(natural_frequency_radps))
+    denominator = v + max(0.0, float(softening_speed_mps))
+    cross_track = wn * wn * wheelbase_m * denominator / (v * v)
+    heading = 2.0 * float(damping_ratio) * wn * wheelbase_m / v - cross_track * wheelbase_m / denominator
+    return max(0.05, heading), cross_track
+
+
+@dataclass(frozen=True)
+class PathPoint:
+    x: float
+    y: float
+    z: float = 0.0
+
+
+def latency_shifted_points(
+    points, age_s: float, speed_mps: float, yaw_rate_radps: float
+) -> list[PathPoint]:
+    """Move a vehicle-frame path into the frame the car has reached age_s after its stamp
+    (constant speed and yaw rate over that time)."""
+    yaw = float(yaw_rate_radps) * age_s
+    distance = float(speed_mps) * age_s
+    dx = distance * math.cos(0.5 * yaw)
+    dy = distance * math.sin(0.5 * yaw)
+    c, s = math.cos(yaw), math.sin(yaw)
+    out = []
+    for point in points:
+        x = float(point.x) - dx
+        y = float(point.y) - dy
+        out.append(PathPoint(c * x + s * y, -s * x + c * y))
+    return out
+
+
+@dataclass(frozen=True)
+class TrackingPath:
+    """Target path seen by the trackers: the received message or its latency-shifted copy."""
+    header: object
+    points: list
+    source: str
 
 
 def stamp_age_sec(now, stamp) -> float:
@@ -513,43 +620,6 @@ def median_curvature_profile(
     return smoothed
 
 
-def reference_curvature_1pm(
-    points,
-    preview_distance_m: float,
-    sample_half_width_m: float,
-) -> float:
-    """Return the smoothed signed path curvature at the preview distance."""
-    half_width = max(0.5, float(sample_half_width_m))
-    preview = max(half_width, float(preview_distance_m))
-    profile = median_curvature_profile(
-        path_curvature_profile(
-            points,
-            preview_distance_m=preview + half_width,
-            sample_half_width_m=half_width,
-        ),
-        window_size=3,
-    )
-    if not profile:
-        return 0.0
-    _, curvature = min(profile, key=lambda item: abs(item[0] - preview))
-    return float(curvature) if math.isfinite(curvature) else 0.0
-
-
-def curvature_feedforward_steering(
-    curvature_1pm: float,
-    wheelbase_m: float,
-    gain: float,
-    curvature_limit_1pm: float,
-    steering_limit_rad: float,
-) -> float:
-    """Convert path curvature to bicycle-model steering with explicit limits."""
-    curvature_limit = max(0.0, float(curvature_limit_1pm))
-    curvature = clamp(float(curvature_1pm), -curvature_limit, curvature_limit)
-    steering = max(0.0, float(gain)) * math.atan(float(wheelbase_m) * curvature)
-    steering_limit = max(0.0, float(steering_limit_rad))
-    return clamp(steering, -steering_limit, steering_limit)
-
-
 def sustained_curvature_profile(
     profile: list[tuple[float, float]],
     threshold_1pm: float,
@@ -687,18 +757,6 @@ def adaptive_lookahead_decision(
     )
 
 
-def curvature_speed_limit_mps(
-    cruise_speed_mps: float,
-    curve_severity: float,
-    minimum_curve_speed_mps: float,
-) -> float:
-    """Blend the cruise limit toward the configured speed as a curve approaches."""
-    cruise = max(0.0, float(cruise_speed_mps))
-    floor = clamp(float(minimum_curve_speed_mps), 0.0, cruise)
-    severity = clamp(float(curve_severity), 0.0, 1.0)
-    return cruise + (floor - cruise) * severity
-
-
 def slew_lookahead(
     current_m: float | None,
     target_m: float,
@@ -760,21 +818,28 @@ class MotionControlNode(Node):
         self.declare_parameter("command_topic", "/planning/command")
         self.declare_parameter("control_rate_hz", 50.0)
         self.declare_parameter("target_stale_sec", 0.35)
+        self.declare_parameter("target_stale_brake_delay_sec", 1.0)
         self.declare_parameter("wheelbase_m", 1.2991017929)
         self.declare_parameter("max_steering_rad", 0.4363)
-        self.declare_parameter("steering_rate_limit_radps", 1.0471975512)
+        self.declare_parameter("steering_neutral_offset_deg", -0.52)
+        self.declare_parameter("steering_friction_speed_mps", [3.0, 6.5, 12.0])
+        self.declare_parameter("steering_friction_comp_deg", [1.0, 0.85, 0.8])
+        self.declare_parameter("steering_error_start_deg", 0.2)
+        self.declare_parameter("steering_error_full_deg", 0.5)
+        self.declare_parameter("steering_error_ramp_s", 0.1)
+        self.declare_parameter("steering_rate_limit_radps", 0.0)
         self.declare_parameter("steering_rate_filter_time_constant_s", 0.15)
         self.declare_parameter("steering_rate_estimate_limit_radps", 2.0943951024)
-        self.declare_parameter("straight_corridor_enabled", True)
-        self.declare_parameter("straight_corridor_preview_time_s", 1.2)
-        self.declare_parameter("straight_corridor_preview_min_m", 4.0)
-        self.declare_parameter("straight_corridor_preview_max_m", 9.0)
-        self.declare_parameter("straight_corridor_deadband_m", 0.08)
-        self.declare_parameter("straight_corridor_full_m", 0.25)
-        self.declare_parameter("straight_heading_deadband_rad", 0.0139626340)
-        self.declare_parameter("straight_heading_full_rad", 0.0349065850)
-        self.declare_parameter("lateral_controller", PURE_PURSUIT)
-        self.declare_parameter("adaptive_lookahead_enabled", True)
+        self.declare_parameter("straight_natural_frequency_radps", 1.5)
+        self.declare_parameter("straight_damping_ratio", 1.1)
+        self.declare_parameter("straight_gain_blend_start_mps", 3.0)
+        self.declare_parameter("straight_gain_full_speed_mps", 6.0)
+        self.declare_parameter("straight_integral_time_s", 4.0)
+        self.declare_parameter("straight_integral_limit_deg", 1.5)
+        self.declare_parameter("straight_integral_min_speed_mps", 4.0)
+        self.declare_parameter("straight_integral_max_error_m", 0.6)
+        self.declare_parameter("path_latency_max_s", 0.3)
+        self.declare_parameter("straight_encoder_deg", -0.20)
         self.declare_parameter("lookahead_base_m", 4.0)
         self.declare_parameter("lookahead_gain_s", 0.9)
         self.declare_parameter("lookahead_min_m", 3.6)
@@ -803,27 +868,28 @@ class MotionControlNode(Node):
         self.declare_parameter("stanley_curve_heading_window_m", 6.0)
         self.declare_parameter("stanley_curve_preview_time_s", 0.18)
         self.declare_parameter("stanley_curve_preview_max_m", 3.5)
-        self.declare_parameter("ff_stanley_feedback_scale", 0.50)
-        self.declare_parameter("ff_curvature_gain", 1.0)
-        self.declare_parameter("ff_preview_time_s", 0.20)
-        self.declare_parameter("ff_preview_min_m", 2.0)
-        self.declare_parameter("ff_preview_max_m", 4.0)
-        self.declare_parameter("ff_curvature_sample_half_width_m", 2.0)
-        self.declare_parameter("ff_curvature_limit_1pm", 0.20)
-        self.declare_parameter("ff_steering_limit_rad", 0.30)
         self.declare_parameter("hybrid_pp_straight_weight", 0.0)
         self.declare_parameter("hybrid_pp_approach_weight", 0.65)
         self.declare_parameter("hybrid_pp_turning_weight", 0.35)
         self.declare_parameter("hybrid_pp_exit_weight", 0.10)
         self.declare_parameter("hybrid_blend_rate_per_s", 6.0)
-        self.declare_parameter("curvature_speed_planning_enabled", True)
-        self.declare_parameter("curvature_speed_min_mps", 3.2)
+        # Paths whose source starts with one of these use Stanley only: a pure pursuit
+        # lookahead point beyond an obstacle would cut through it. None by default; the Midan
+        # avoidance launch (case 17) names the bypass paths. [""] keeps the type a string array.
+        self.declare_parameter("stanley_only_path_source_prefixes", [""])
+        self.declare_parameter("hybrid_route_length_m", 0.0)
+        self.declare_parameter("hybrid_route_segment_boundaries_m", [], ParameterDescriptor(dynamic_typing=True))
+        self.declare_parameter("hybrid_route_segment_phases", [], ParameterDescriptor(dynamic_typing=True))
+        self.declare_parameter("route_context_topic", "/planning/route_context")
         self.declare_parameter("max_accel_mps2", 1.0)
         self.declare_parameter("signal_release_accel_mps2", 2.0)
-        self.declare_parameter("signal_release_boost_speed_mps", 3.8)
+        self.declare_parameter("signal_release_boost_speed_mps", 5.0)
         self.declare_parameter("max_decel_mps2", 2.0)
+        self.declare_parameter("stop_pre_decel_mps2", 10.0)
+        self.declare_parameter("obstacle_decel_mps2", 10.0)
         self.declare_parameter("stop_speed_epsilon_mps", 0.05)
         self.declare_parameter("planned_stop_brake_distance_m", 2.0)
+        self.declare_parameter("brake_release_delay_sec", 0.8)
         self.declare_parameter("stopped_steering_hold_speed_mps", 0.10)
         self.declare_parameter("planned_stop_steering_align_distance_m", 2.0)
         self.declare_parameter("stop_release_steering_resume_speed_mps", 0.30)
@@ -831,6 +897,55 @@ class MotionControlNode(Node):
         self.target_stale_sec = float(self.get_parameter("target_stale_sec").value)
         self.wheelbase_m = float(self.get_parameter("wheelbase_m").value)
         self.max_steering_rad = float(self.get_parameter("max_steering_rad").value)
+        compensation_config = SteeringCompensationConfig(
+            neutral_offset_rad=math.radians(float(self.get_parameter("steering_neutral_offset_deg").value)),
+            friction_speeds_mps=tuple(
+                float(v) for v in self.get_parameter("steering_friction_speed_mps").value or []
+            ),
+            friction_rad=tuple(
+                math.radians(float(v))
+                for v in self.get_parameter("steering_friction_comp_deg").value or []
+            ),
+            error_start_rad=math.radians(float(self.get_parameter("steering_error_start_deg").value)),
+            error_full_rad=math.radians(float(self.get_parameter("steering_error_full_deg").value)),
+            error_ramp_s=float(self.get_parameter("steering_error_ramp_s").value),
+        )
+        validate_steering_compensation(compensation_config)
+        self.straight_natural_frequency_radps = float(
+            self.get_parameter("straight_natural_frequency_radps").value
+        )
+        self.straight_damping_ratio = float(self.get_parameter("straight_damping_ratio").value)
+        self.straight_gain_blend_start_mps = float(self.get_parameter("straight_gain_blend_start_mps").value)
+        self.straight_gain_full_speed_mps = float(self.get_parameter("straight_gain_full_speed_mps").value)
+        self.straight_integral_time_s = float(self.get_parameter("straight_integral_time_s").value)
+        self.straight_integral_limit_rad = math.radians(
+            float(self.get_parameter("straight_integral_limit_deg").value)
+        )
+        self.straight_integral_min_speed_mps = float(
+            self.get_parameter("straight_integral_min_speed_mps").value
+        )
+        self.straight_integral_max_error_m = float(self.get_parameter("straight_integral_max_error_m").value)
+        self.path_latency_max_s = float(self.get_parameter("path_latency_max_s").value)
+        self.straight_encoder_rad = math.radians(
+            float(self.get_parameter("straight_encoder_deg").value)
+        )
+        if not (
+            0.3 <= self.straight_natural_frequency_radps <= 3.0
+            and 0.5 <= self.straight_damping_ratio <= 1.5
+            and 0.0 <= self.straight_gain_blend_start_mps < self.straight_gain_full_speed_mps
+            and self.straight_integral_max_error_m > 0.0
+            and self.straight_integral_time_s > 0.0
+            and 0.0 <= self.straight_integral_limit_rad <= math.radians(3.0)
+            and 0.0 <= self.path_latency_max_s <= 0.5
+            and abs(self.straight_encoder_rad) <= math.radians(3.0)
+        ):
+            raise ValueError(
+                "straight tracking needs wn 0.3..3 rad/s, damping 0.5..1.5, 0 <= gain blend start < full "
+                "speed, integral max error > 0, "
+                "integral time > 0, integral limit 0..3 deg, latency max 0..0.5 s, "
+                "straight encoder within 3 deg"
+            )
+        self.steering_compensator = SteeringCompensator(compensation_config)
         self.steering_rate_limit_radps = float(
             self.get_parameter("steering_rate_limit_radps").value
         )
@@ -843,39 +958,6 @@ class MotionControlNode(Node):
         self.steering_rate_estimate_limit_radps = max(
             0.0,
             float(self.get_parameter("steering_rate_estimate_limit_radps").value),
-        )
-        self.straight_corridor_enabled = bool(
-            self.get_parameter("straight_corridor_enabled").value
-        )
-        self.straight_corridor_preview_time_s = max(
-            0.0, float(self.get_parameter("straight_corridor_preview_time_s").value)
-        )
-        self.straight_corridor_preview_min_m = max(
-            0.0, float(self.get_parameter("straight_corridor_preview_min_m").value)
-        )
-        self.straight_corridor_preview_max_m = max(
-            self.straight_corridor_preview_min_m,
-            float(self.get_parameter("straight_corridor_preview_max_m").value),
-        )
-        self.straight_corridor_deadband_m = max(
-            0.0, float(self.get_parameter("straight_corridor_deadband_m").value)
-        )
-        self.straight_corridor_full_m = max(
-            self.straight_corridor_deadband_m,
-            float(self.get_parameter("straight_corridor_full_m").value),
-        )
-        self.straight_heading_deadband_rad = max(
-            0.0, float(self.get_parameter("straight_heading_deadband_rad").value)
-        )
-        self.straight_heading_full_rad = max(
-            self.straight_heading_deadband_rad,
-            float(self.get_parameter("straight_heading_full_rad").value),
-        )
-        self.lateral_controller = validate_lateral_controller(
-            str(self.get_parameter("lateral_controller").value)
-        )
-        self.adaptive_lookahead_enabled = bool(
-            self.get_parameter("adaptive_lookahead_enabled").value
         )
         self.lookahead_base_m = float(self.get_parameter("lookahead_base_m").value)
         self.lookahead_gain_s = float(self.get_parameter("lookahead_gain_s").value)
@@ -976,38 +1058,6 @@ class MotionControlNode(Node):
             0.0,
             float(self.get_parameter("stanley_curve_preview_max_m").value),
         )
-        self.ff_stanley_feedback_scale = clamp(
-            float(self.get_parameter("ff_stanley_feedback_scale").value),
-            0.0,
-            1.0,
-        )
-        self.ff_curvature_gain = max(
-            0.0, float(self.get_parameter("ff_curvature_gain").value)
-        )
-        self.ff_preview_time_s = max(
-            0.0, float(self.get_parameter("ff_preview_time_s").value)
-        )
-        self.ff_preview_min_m = max(
-            0.0, float(self.get_parameter("ff_preview_min_m").value)
-        )
-        self.ff_preview_max_m = max(
-            self.ff_preview_min_m,
-            float(self.get_parameter("ff_preview_max_m").value),
-        )
-        self.ff_curvature_sample_half_width_m = max(
-            0.5,
-            float(
-                self.get_parameter("ff_curvature_sample_half_width_m").value
-            ),
-        )
-        self.ff_curvature_limit_1pm = max(
-            0.0, float(self.get_parameter("ff_curvature_limit_1pm").value)
-        )
-        self.ff_steering_limit_rad = clamp(
-            float(self.get_parameter("ff_steering_limit_rad").value),
-            0.0,
-            self.max_steering_rad,
-        )
         self.hybrid_pp_straight_weight = clamp(
             float(self.get_parameter("hybrid_pp_straight_weight").value),
             0.0,
@@ -1032,12 +1082,12 @@ class MotionControlNode(Node):
             0.0,
             float(self.get_parameter("hybrid_blend_rate_per_s").value),
         )
-        self.curvature_speed_planning_enabled = bool(
-            self.get_parameter("curvature_speed_planning_enabled").value
+        self.stanley_only_path_source_prefixes = tuple(
+            str(prefix).strip()
+            for prefix in self.get_parameter("stanley_only_path_source_prefixes").value
+            if str(prefix).strip()
         )
-        self.curvature_speed_min_mps = max(
-            0.0, float(self.get_parameter("curvature_speed_min_mps").value)
-        )
+        self.stanley_only_path_active = False
         self.max_accel_mps2 = float(self.get_parameter("max_accel_mps2").value)
         self.signal_release_accel_mps2 = float(
             self.get_parameter("signal_release_accel_mps2").value
@@ -1046,12 +1096,18 @@ class MotionControlNode(Node):
             self.get_parameter("signal_release_boost_speed_mps").value
         )
         self.max_decel_mps2 = float(self.get_parameter("max_decel_mps2").value)
+        self.stop_pre_decel_mps2 = float(self.get_parameter("stop_pre_decel_mps2").value)
+        self.obstacle_decel_mps2 = float(self.get_parameter("obstacle_decel_mps2").value)
         self.stop_speed_epsilon_mps = float(
             self.get_parameter("stop_speed_epsilon_mps").value
         )
         self.planned_stop_brake_distance_m = max(
             0.0,
             float(self.get_parameter("planned_stop_brake_distance_m").value),
+        )
+        self.brake_release_delay_sec = max(
+            0.0,
+            float(self.get_parameter("brake_release_delay_sec").value),
         )
         self.stopped_steering_hold_speed_mps = max(
             0.0,
@@ -1070,10 +1126,27 @@ class MotionControlNode(Node):
             ),
         )
         self.control_rate_hz = max(1.0, float(self.get_parameter("control_rate_hz").value))
+        self.input_loss = InputLossLatch(
+            float(self.get_parameter("target_stale_brake_delay_sec").value),
+            self.stop_speed_epsilon_mps,
+        )
 
         self.latest_target_path: Centerline | None = None
         self.latest_target_speed: TargetSpeed | None = None
         self.latest_vehicle_state: VehicleState | None = None
+        self.latest_route_context: RouteContext | None = None
+        self.hybrid_route_length_m = float(
+            self.get_parameter("hybrid_route_length_m").value
+        )
+        self.hybrid_route_phase_active = False
+
+        self.hybrid_route_segment_boundaries_m, self.hybrid_route_segment_phases = validate_route_segments(
+            self.get_parameter("hybrid_route_segment_boundaries_m").value or [],
+            self.get_parameter("hybrid_route_segment_phases").value or [],
+            self.hybrid_route_length_m,
+        )
+        self.hybrid_route_segment_index = -1
+        self.hybrid_route_fallback_reason = 'not_evaluated'
 
         self.commanded_speed_mps = 0.0
         self.commanded_steering_rad = 0.0
@@ -1086,10 +1159,6 @@ class MotionControlNode(Node):
         self.hybrid_phase = "straight"
         self.hybrid_pp_steering_rad = 0.0
         self.hybrid_stanley_steering_rad = 0.0
-        self.ff_reference_curvature_1pm = 0.0
-        self.ff_preview_distance_m = self.ff_preview_min_m
-        self.ff_steering_rad = 0.0
-        self.ff_stanley_feedback_rad = 0.0
         self.lookahead_decision = LookaheadDecision(
             0.0, "uninitialized", 0.0, 0.0, math.inf
         )
@@ -1109,18 +1178,19 @@ class MotionControlNode(Node):
             self.stanley_heading_window_m,
             self.stanley_curve_heading_window_m,
         )
-        self.curvature_speed_limit_mps = math.inf
         self.steering_tracking_error_rad = 0.0
         self.actual_steering_rate_radps = 0.0
         self.actual_steering_rate_sample_rad: float | None = None
         self.actual_steering_rate_sample_ns: int | None = None
         self.raw_steering_rad = 0.0
-        self.corridor_scaled_steering_rad = 0.0
-        self.straight_corridor = StraightCorridorDecision(
-            1.0, 0.0, 0.0, 0.0, False
-        )
+        self.straight_integral_rad = 0.0
+        self.path_latency_s = 0.0
         self.signal_release_boost_active = False
         self.planned_stop_steering_hold_active = False
+        self.brake_command_active = False
+        self.brake_release_pending = False
+        self.brake_release_elapsed_sec = 0.0
+        self.standstill_brake_released = False
         self.last_drive_mode: int | None = None
         self.last_control_time = self.get_clock().now()
 
@@ -1152,11 +1222,15 @@ class MotionControlNode(Node):
             self.on_vehicle_state,
             10,
         )
+        if self.hybrid_route_segment_phases:
+            self.create_subscription(
+                RouteContext,
+                str(self.get_parameter("route_context_topic").value),
+                self.on_route_context,
+                10,
+            )
         self.create_timer(1.0 / self.control_rate_hz, self.on_control_timer)
         self.create_timer(0.2, self.publish_lookahead_diagnostic)
-        self.get_logger().info(
-            f"lateral controller: {self.lateral_controller}"
-        )
 
     def on_target_path(self, msg: Centerline) -> None:
         self.latest_target_path = msg
@@ -1224,11 +1298,22 @@ class MotionControlNode(Node):
         command.header.stamp = now.to_msg()
 
         if self.manual_mode_active():
+            self.input_loss_latch().reset()
             self.apply_manual_standby(command)
-        elif self.targets_are_stale(now):
-            self.apply_stop_motion(command)
         else:
-            self.apply_nominal_motion(command, dt)
+            targets_ok = not self.targets_are_stale(now)
+            loss = self.input_loss_latch().update(
+                now.nanoseconds * 1.0e-9,
+                targets_ok,
+                self.measured_speed_mps(),
+                brake_engaged=bool(getattr(self, "brake_command_active", False)),
+            )
+            if loss.brake:
+                self.apply_stop_motion(command)
+            elif loss.stale:
+                self.apply_stale_coast(command)
+            else:
+                self.apply_nominal_motion(command, dt)
 
         self.command_pub.publish(command)
 
@@ -1247,6 +1332,11 @@ class MotionControlNode(Node):
         )
         self.signal_release_boost_active = False
         self.planned_stop_steering_hold_active = False
+        compensator = getattr(self, "steering_compensator", None)
+        if compensator is not None:
+            compensator.reset()
+        self.straight_integral_rad = 0.0
+        self.reset_brake_release_sequence()
         self.current_lookahead_m = None
         self.lookahead_phase = "uninitialized"
         self.lookahead_curve_active = False
@@ -1254,14 +1344,12 @@ class MotionControlNode(Node):
         self.hybrid_pp_weight = getattr(self, "hybrid_pp_straight_weight", 0.0)
         self.hybrid_target_pp_weight = self.hybrid_pp_weight
         self.hybrid_phase = "straight"
+        self.hybrid_route_phase_active = False
         self.hybrid_pp_steering_rad = 0.0
         self.hybrid_stanley_steering_rad = 0.0
+        self.stanley_only_path_active = False
         self.steering_tracking_error_rad = 0.0
         self.raw_steering_rad = self.commanded_steering_rad
-        self.corridor_scaled_steering_rad = self.commanded_steering_rad
-        self.straight_corridor = StraightCorridorDecision(
-            1.0, 0.0, 0.0, 0.0, False
-        )
 
     def apply_manual_standby(self, command: ActuatorCommand) -> None:
         assert self.latest_vehicle_state is not None
@@ -1284,8 +1372,37 @@ class MotionControlNode(Node):
             return True
         return False
 
+    def input_loss_latch(self) -> InputLossLatch:
+        latch = getattr(self, "input_loss", None)
+        if latch is None:
+            latch = self.input_loss = InputLossLatch(
+                1.0, getattr(self, "stop_speed_epsilon_mps", 0.05)
+            )
+        return latch
+
+    def measured_speed_mps(self) -> float | None:
+        vehicle = self.latest_vehicle_state
+        return None if vehicle is None else abs(float(vehicle.speed_mps))
+
+    def hold_measured_steering(self) -> None:
+        if self.latest_vehicle_state is not None:
+            self.commanded_steering_rad = clamp(
+                float(self.latest_vehicle_state.steering_rad),
+                -self.max_steering_rad,
+                self.max_steering_rad,
+            )
+
+    def apply_stale_coast(self, command: ActuatorCommand) -> None:
+        """Stale targets, first second (D2): speed 0 without brake, steering held where it is."""
+        self.commanded_speed_mps = 0.0
+        self.hold_measured_steering()
+        command.steering_target_rad = float(self.commanded_steering_rad)
+        command.speed_target_mps = 0.0
+        command.brake_engage = False
+
     def apply_stop_motion(self, command: ActuatorCommand) -> None:
         self.commanded_speed_mps = 0.0
+        self.mark_brake_engaged()
         if self.latest_vehicle_state is not None:
             self.commanded_steering_rad = clamp(
                 float(self.latest_vehicle_state.steering_rad),
@@ -1305,32 +1422,52 @@ class MotionControlNode(Node):
         planned_stop = bool(self.latest_target_speed.need_stop)
         stop_target_distance = float(self.latest_target_speed.stop_target_distance)
 
-        self.curvature_speed_limit_mps = self.compute_curvature_speed_limit(target_speed)
-        target_speed = min(target_speed, self.curvature_speed_limit_mps)
-        # Mission planners already shape speed; route-only tracking supplies its finish distance.
-        if planned_stop and self.latest_target_speed.source_behavior == "GLOBAL_ROUTE":
-            if not math.isfinite(stop_target_distance):
-                self.apply_stop_motion(command)
-                return
-            if stop_target_distance <= self.planned_stop_brake_distance_m:
-                target_speed = 0.0
-            elif stop_target_distance < INF_DISTANCE:
-                target_speed = min(
-                    target_speed,
-                    math.sqrt(max(0.0, 2.0 * self.max_decel_mps2 * stop_target_distance)),
-                )
-
         actual_speed = (
             abs(float(self.latest_vehicle_state.speed_mps))
             if self.latest_vehicle_state is not None
             else abs(float(self.commanded_speed_mps))
+        )
+        accel_limit = self.select_accel_limit(target_speed)
+        self.commanded_speed_mps = self.ramp_speed(
+            self.commanded_speed_mps, target_speed, dt, accel_limit,
+            self.select_decel_limit(),
+        )
+        hold_brake = (
+            planned_stop
+            and target_speed <= self.stop_speed_epsilon_mps
+            and (
+                (
+                    abs(float(self.commanded_speed_mps))
+                    <= self.stop_speed_epsilon_mps
+                    and actual_speed <= self.stop_speed_epsilon_mps
+                )
+                or stop_target_distance <= self.planned_stop_brake_distance_m
+            )
         )
         stopped_for_planned_hold = (
             planned_stop
             and target_speed <= self.stop_speed_epsilon_mps
             and actual_speed <= getattr(self, "stopped_steering_hold_speed_mps", 0.10)
         )
-        if self.latest_vehicle_state is not None and actual_speed < MIN_STEERING_SPEED_MPS:
+        # Standing at a planned stop, Decision lets the brake servo go to spare it: speed 0
+        # without brake. Rolling above the stopped speed brakes again here at once.
+        self.standstill_brake_released = (
+            hold_brake
+            and stopped_for_planned_hold
+            and STANDSTILL_BRAKE_RELEASE in self.latest_target_speed.constraints
+        )
+        # The path keeps steering the car while it brakes until it has slowed below the
+        # steerable speed: a hard signal brake from 10 m/s rolls 17-18 m, and holding the wheel
+        # there let the car drift 2.3 m and yaw 14 deg off the route (2026-10-17 final, Z1).
+        # Below the steerable speed the car holds the measured angle. The real car only follows
+        # this once lateral_ctrl keeps KEYA enabled under brake_engage (steering_actuator_node.cpp
+        # requestImmediateDisable(COMMAND_BRAKE)).
+        braking_while_rolling = hold_brake and actual_speed >= MIN_STEERING_SPEED_MPS
+        if hold_brake and actual_speed > self.stop_speed_epsilon_mps and not braking_while_rolling:
+            # D7: the car brakes and is slower than the steerable speed: the target is the
+            # measured steering (hold).
+            self.hold_measured_steering()
+        elif self.latest_vehicle_state is not None and actual_speed < MIN_STEERING_SPEED_MPS:
             self.commanded_steering_rad = clamp(
                 float(self.latest_vehicle_state.steering_rad),
                 -self.max_steering_rad,
@@ -1348,43 +1485,69 @@ class MotionControlNode(Node):
             pass
         else:
             self.planned_stop_steering_hold_active = False
-            self.commanded_steering_rad = self.compute_limited_steering(
-                dt,
-                self.planned_stop_steering_scale(
-                    planned_stop,
-                    stop_target_distance,
-                ),
+            # Distance 0 means "brake now", not "at the stop line": no stop-line straightening.
+            steering_scale = (
+                1.0
+                if braking_while_rolling and stop_target_distance <= 0.0
+                else self.planned_stop_steering_scale(planned_stop, stop_target_distance)
             )
+            self.commanded_steering_rad = self.compute_limited_steering(dt, steering_scale)
         self.update_steering_tracking_diagnostic()
-        accel_limit = self.select_accel_limit(target_speed)
-        self.commanded_speed_mps = self.ramp_speed(
-            self.commanded_speed_mps, target_speed, dt, accel_limit
-        )
-        hold_brake = (
-            planned_stop
-            and target_speed <= self.stop_speed_epsilon_mps
-            and (
-                (
-                    abs(float(self.commanded_speed_mps))
-                    <= self.stop_speed_epsilon_mps
-                    and actual_speed <= self.stop_speed_epsilon_mps
-                )
-                or stop_target_distance <= self.planned_stop_brake_distance_m
-            )
-        )
+        brake = hold_brake and not self.standstill_brake_released
+        release_only = self.apply_brake_release_sequence(brake, dt)
 
         command.steering_target_rad = float(self.commanded_steering_rad)
-        command.speed_target_mps = 0.0 if hold_brake else float(self.commanded_speed_mps)
-        command.brake_engage = hold_brake
+        command.speed_target_mps = (
+            0.0 if hold_brake or release_only else float(self.commanded_speed_mps)
+        )
+        command.brake_engage = brake
+
+    def reset_brake_release_sequence(self) -> None:
+        self.brake_command_active = False
+        self.brake_release_pending = False
+        self.brake_release_elapsed_sec = 0.0
+
+    def mark_brake_engaged(self) -> None:
+        self.brake_command_active = True
+        self.brake_release_pending = False
+        self.brake_release_elapsed_sec = 0.0
+
+    def apply_brake_release_sequence(self, hold_brake: bool, dt: float) -> bool:
+        """Keep traction at zero while the physical brake servo releases."""
+        if hold_brake:
+            self.commanded_speed_mps = 0.0
+            self.mark_brake_engaged()
+            return False
+
+        if self.brake_command_active:
+            self.brake_command_active = False
+            self.brake_release_pending = self.brake_release_delay_sec > 0.0
+            self.brake_release_elapsed_sec = 0.0
+            return self.brake_release_pending
+
+        if not self.brake_release_pending:
+            return False
+
+        self.commanded_speed_mps = 0.0
+        self.brake_release_elapsed_sec += max(0.0, dt)
+        if self.brake_release_elapsed_sec + 1.0e-9 >= self.brake_release_delay_sec:
+            self.brake_release_pending = False
+        return True
 
     def select_accel_limit(self, target_speed: float) -> float:
         target = self.latest_target_speed
-        if target is None:
+        # max_accel_mps2 0 lifts the acceleration limit, release boost included.
+        if target is None or self.max_accel_mps2 <= 0.0:
             self.signal_release_boost_active = False
             return self.max_accel_mps2
 
         constraints = set(target.constraints)
-        if "SIGNAL_PASS_COMMITTED" in constraints and not target.need_stop:
+        release_boost_requested = bool(
+            constraints.intersection(
+                {"SIGNAL_PASS_COMMITTED", "SIGNAL_RELEASE", "TIMED_STOP_RELEASE"}
+            )
+        )
+        if release_boost_requested and not target.need_stop:
             self.signal_release_boost_active = True
         if target.need_stop or target.source_behavior in {
             "EMERGENCY",
@@ -1394,7 +1557,7 @@ class MotionControlNode(Node):
         }:
             self.signal_release_boost_active = False
 
-        boost_speed = getattr(self, "signal_release_boost_speed_mps", 3.8)
+        boost_speed = getattr(self, "signal_release_boost_speed_mps", 5.0)
         if (
             self.signal_release_boost_active
             and target_speed > self.commanded_speed_mps
@@ -1409,40 +1572,18 @@ class MotionControlNode(Node):
             self.signal_release_boost_active = False
         return self.max_accel_mps2
 
-    def compute_curvature_speed_limit(self, cruise_speed_mps: float) -> float:
-        if (
-            not getattr(self, "curvature_speed_planning_enabled", False)
-            or self.latest_target_path is None
-            or len(self.latest_target_path.points) < 2
-        ):
-            return max(0.0, cruise_speed_mps)
-
-        speed = (
-            abs(float(self.latest_vehicle_state.speed_mps))
-            if self.latest_vehicle_state is not None
-            else abs(float(self.commanded_speed_mps))
-        )
-        decision = adaptive_lookahead_decision(
-            self.latest_target_path.points,
-            speed,
-            self.lookahead_base_m,
-            self.lookahead_gain_s,
-            self.lookahead_min_m,
-            self.lookahead_max_m,
-            self.lookahead_curve_start_1pm,
-            self.lookahead_curve_full_1pm,
-            self.lookahead_near_window_m,
-            self.lookahead_preview_distance_m,
-            self.lookahead_curve_exit_1pm,
-            self.lookahead_curve_speed_gain_s,
-            self.lookahead_curve_minimum_samples,
-            getattr(self, "lookahead_curve_active", False),
-        )
-        return curvature_speed_limit_mps(
-            cruise_speed_mps,
-            decision.curve_severity,
-            self.curvature_speed_min_mps,
-        )
+    def select_decel_limit(self) -> float:
+        target = self.latest_target_speed
+        if target is not None and not target.need_stop:
+            if target.source_behavior == "OBSTACLE":
+                return self.obstacle_decel_mps2
+            constraint = {
+                "STATIC_STOP": "BRAKE_TRIGGER_PRE_DECEL",
+                "TRAFFIC_LIGHT": "SIGNAL_BRAKE_TRIGGER_PRE_DECEL",
+            }.get(target.source_behavior)
+            if constraint is not None and constraint in target.constraints:
+                return self.stop_pre_decel_mps2
+        return self.max_decel_mps2
 
     def ramp_speed(
         self,
@@ -1450,11 +1591,15 @@ class MotionControlNode(Node):
         target: float,
         dt: float,
         accel_limit: float | None = None,
+        decel_limit: float | None = None,
     ) -> float:
         if target >= current:
             limit = self.max_accel_mps2 if accel_limit is None else accel_limit
+            if limit <= 0.0:
+                return target
             return min(target, current + limit * dt)
-        return max(target, current - self.max_decel_mps2 * dt)
+        limit = self.max_decel_mps2 if decel_limit is None else decel_limit
+        return max(target, current - limit * dt)
 
     def planned_stop_steering_scale(
         self,
@@ -1466,10 +1611,12 @@ class MotionControlNode(Node):
             "planned_stop_steering_align_distance_m",
             0.0,
         )
+        # Distance 0 means "brake now", not "at the line": it never straightens the wheels.
         if (
             not planned_stop
             or align_distance <= 0.0
             or not math.isfinite(stop_target_distance)
+            or stop_target_distance <= 0.0
             or stop_target_distance >= INF_DISTANCE
         ):
             return 1.0
@@ -1479,41 +1626,36 @@ class MotionControlNode(Node):
         self.raw_steering_rad = self.compute_lateral_steering() * clamp(
             target_scale, 0.0, 1.0
         )
-        raw = self.apply_straight_corridor(self.raw_steering_rad)
-        self.corridor_scaled_steering_rad = raw
-        max_delta = self.steering_rate_limit_radps * dt
-        delta = clamp(raw - self.commanded_steering_rad, -max_delta, max_delta)
+        raw = self.apply_steering_compensation(self.raw_steering_rad, dt)
+        delta = raw - self.commanded_steering_rad
+        if self.steering_rate_limit_radps > 0.0:
+            max_delta = self.steering_rate_limit_radps * dt
+            delta = clamp(delta, -max_delta, max_delta)
         return clamp(
             self.commanded_steering_rad + delta,
             -self.max_steering_rad,
             self.max_steering_rad,
         )
 
-    def apply_straight_corridor(self, steering_rad: float) -> float:
-        if (
-            not getattr(self, "straight_corridor_enabled", False)
-            or self.latest_target_path is None
-            or self.latest_vehicle_state is None
-        ):
-            self.straight_corridor = StraightCorridorDecision(
-                1.0, 0.0, 0.0, 0.0, False
-            )
-            return steering_rad
-        self.straight_corridor = straight_corridor_decision(
-            self.latest_target_path.points,
-            self.latest_target_path.source,
-            self.lookahead_phase,
-            float(self.latest_vehicle_state.speed_mps),
-            self.straight_corridor_preview_time_s,
-            self.straight_corridor_preview_min_m,
-            self.straight_corridor_preview_max_m,
-            self.straight_corridor_deadband_m,
-            self.straight_corridor_full_m,
-            self.straight_heading_deadband_rad,
-            self.straight_heading_full_rad,
-            self.stanley_heading_window_m,
+    def apply_steering_compensation(self, steering_rad: float, dt: float) -> float:
+        vehicle = self.latest_vehicle_state
+        encoder = float(vehicle.steering_rad) if vehicle is not None else None
+        speed = (
+            abs(float(vehicle.speed_mps)) if vehicle is not None
+            else abs(float(self.commanded_speed_mps))
         )
-        return steering_rad * self.straight_corridor.scale
+        return self.steering_compensator.apply(steering_rad, encoder, speed, dt)
+
+    def steering_compensation_diagnostics(self) -> list[KeyValue]:
+        compensator = self.steering_compensator
+        return [
+            KeyValue(key="straight_integral_deg",
+                     value=f"{math.degrees(getattr(self, 'straight_integral_rad', 0.0)):.3f}"),
+            KeyValue(key="path_latency_s", value=f"{getattr(self, 'path_latency_s', 0.0):.3f}"),
+            KeyValue(key="steering_compensation_deg", value=f"{math.degrees(compensator.added_rad):.3f}"),
+            KeyValue(key="steering_friction_push_deg",
+                     value=f"{math.degrees(compensator.friction_value_rad):.3f}"),
+        ]
 
     def update_steering_tracking_diagnostic(self) -> None:
         if self.latest_vehicle_state is None:
@@ -1526,54 +1668,139 @@ class MotionControlNode(Node):
         self.steering_tracking_error_rad = abs(self.commanded_steering_rad - actual)
 
     def compute_lateral_steering(self) -> float:
-        controller = getattr(self, "lateral_controller", PURE_PURSUIT)
-        if controller == PURE_PURSUIT:
-            return self.compute_pure_pursuit_steering()
-        if controller == STANLEY:
-            return self.compute_stanley_steering()
-        if controller == PP_STANLEY:
-            return self.compute_pp_stanley_steering()
-        if controller == FF_STANLEY:
-            return self.compute_ff_stanley_steering()
-        raise RuntimeError(f"lateral controller '{controller}' is not implemented")
+        received = self.latest_target_path
+        shifted = self.latency_compensated_path(received)
+        if shifted is not None:
+            # The trackers read latest_target_path; they see the shifted copy for this tick only.
+            self.latest_target_path = shifted
+        try:
+            steering = self.compute_pp_stanley_steering()
+        finally:
+            self.latest_target_path = received
+        return steering + self.update_straight_integral()
 
-    def compute_ff_stanley_steering(self) -> float:
-        """Use route curvature as feedforward and Stanley for error feedback."""
-        if self.latest_target_path is None or not self.latest_target_path.points:
-            self.ff_reference_curvature_1pm = 0.0
-            self.ff_steering_rad = 0.0
-            self.ff_stanley_feedback_rad = 0.0
-            return 0.0
+    def latency_compensated_path(self, path) -> TrackingPath | None:
+        """The local path was cut from the pose at its stamp; move it by the travel since
+        (vehicle speed, yaw rate from the encoder about its straight-running angle)."""
+        self.path_latency_s = 0.0
+        vehicle = self.latest_vehicle_state
+        # Only global-route paths carry the route-context stamp of the pose they were cut from;
+        # avoidance and held paths are stamped by the scene and would jump between sources.
+        if path is None or vehicle is None or not path.points or path.source not in GLOBAL_ROUTE_SOURCES:
+            return None
+        stamp = path.header.stamp
+        if stamp.sec == 0 and stamp.nanosec == 0:
+            return None
+        age = (self.get_clock().now().nanoseconds
+               - (stamp.sec * 1_000_000_000 + stamp.nanosec)) * 1.0e-9
+        age = clamp(age, 0.0, self.path_latency_max_s)
+        speed = float(vehicle.speed_mps)
+        if age <= 0.0 or not math.isfinite(speed):
+            return None
+        yaw_rate = speed * math.tan(
+            float(vehicle.steering_rad) - self.straight_encoder_rad
+        ) / self.wheelbase_m
+        self.path_latency_s = age
+        return TrackingPath(path.header, latency_shifted_points(path.points, age, speed, yaw_rate),
+                            path.source)
 
-        speed_mps = (
-            abs(float(self.latest_vehicle_state.speed_mps))
-            if self.latest_vehicle_state is not None
-            else abs(float(self.commanded_speed_mps))
+    def straight_gains(self, speed_mps: float) -> tuple[float, float]:
+        """Straight gains: the scheduled ones from straight_gain_full_speed_mps up; below it the
+        values of that speed blend back to the fixed straight gains by
+        straight_gain_blend_start_mps, so stopping, restarting and slow avoidance keep them."""
+        speed = abs(float(speed_mps))
+        full = self.straight_gain_full_speed_mps
+        heading, cross_track = scheduled_stanley_gains(
+            max(speed, full), self.straight_natural_frequency_radps, self.straight_damping_ratio,
+            self.wheelbase_m, self.stanley_softening_speed_mps, full,
         )
-        self.ff_preview_distance_m = clamp(
-            speed_mps * self.ff_preview_time_s,
-            self.ff_preview_min_m,
-            self.ff_preview_max_m,
+        start = self.straight_gain_blend_start_mps
+        share = clamp((speed - start) / (full - start), 0.0, 1.0)
+        return (
+            self.stanley_heading_gain + share * (heading - self.stanley_heading_gain),
+            self.stanley_cross_track_gain + share * (cross_track - self.stanley_cross_track_gain),
         )
-        self.ff_reference_curvature_1pm = reference_curvature_1pm(
-            self.latest_target_path.points,
-            self.ff_preview_distance_m,
-            self.ff_curvature_sample_half_width_m,
-        )
-        self.ff_steering_rad = curvature_feedforward_steering(
-            self.ff_reference_curvature_1pm,
-            self.wheelbase_m,
-            self.ff_curvature_gain,
-            self.ff_curvature_limit_1pm,
-            self.ff_steering_limit_rad,
-        )
-        self.ff_stanley_feedback_rad = (
-            self.ff_stanley_feedback_scale * self.compute_stanley_steering()
-        )
-        return clamp(
-            self.ff_steering_rad + self.ff_stanley_feedback_rad,
-            -self.max_steering_rad,
-            self.max_steering_rad,
+
+    def update_straight_integral(self) -> float:
+        """Slow integral of the front-axle CTE on global-route straights.
+
+        The car needs a small steady right command to run straight (encoder about −0.3~−0.5°,
+        differing by day); without it Stanley holds that command with a lateral offset that
+        grows as (v+3)/ke. Held elsewhere (curves, avoidance, low speed, errors above
+        straight_integral_max_error_m), cleared in manual.
+        """
+        vehicle = self.latest_vehicle_state
+        path = self.latest_target_path
+        decision = self.stanley_decision
+        speed = abs(float(vehicle.speed_mps)) if vehicle is not None else 0.0
+        if (
+            vehicle is not None
+            and vehicle.mode == VehicleState.MODE_AUTO
+            and path is not None
+            and path.source in GLOBAL_ROUTE_SOURCES
+            and self.lookahead_phase == "straight"
+            and decision.valid
+            and speed >= self.straight_integral_min_speed_mps
+            # A large error is a transient (start offset, rejoin) for the proportional terms.
+            and abs(decision.cross_track_error_m) <= self.straight_integral_max_error_m
+        ):
+            _, cross_track_gain = self.straight_gains(speed)
+            rate = (cross_track_gain * decision.cross_track_error_m
+                    / (speed + self.stanley_softening_speed_mps) / self.straight_integral_time_s)
+            self.straight_integral_rad = clamp(
+                self.straight_integral_rad + rate / self.control_rate_hz,
+                -self.straight_integral_limit_rad,
+                self.straight_integral_limit_rad,
+            )
+        return self.straight_integral_rad
+
+    def on_route_context(self, message: RouteContext) -> None:
+        self.latest_route_context = message
+
+    def select_hybrid_phase(self, geometry_phase: str) -> str:
+        self.hybrid_route_phase_active = False
+        self.hybrid_route_segment_index = -1
+        self.hybrid_route_fallback_reason = 'no_valid_global_context'
+        boundaries = getattr(self, "hybrid_route_segment_boundaries_m", ())
+        phases = getattr(self, "hybrid_route_segment_phases", ())
+        context = getattr(self, "latest_route_context", None)
+        if (
+            not phases
+            or context is None
+            or not context.route_projection_valid
+            or self.latest_target_path is None
+            or self.latest_target_path.source not in {
+                "global_route_local_path", "global_route_constant_speed"
+            }
+        ):
+            return geometry_phase
+        stamp = context.header.stamp
+        age = (self.get_clock().now().nanoseconds
+               - (stamp.sec * 1_000_000_000 + stamp.nanosec)) * 1.0e-9
+        route_length = float(context.progress_s) + float(context.distance_to_finish)
+        # An old progress sample or a different map must not select a fixed corner.
+        if (
+            not 0.0 <= age <= self.target_stale_sec
+            or not math.isfinite(route_length)
+            or abs(route_length - self.hybrid_route_length_m) > 0.5
+        ):
+            self.hybrid_route_fallback_reason = 'stale_context_or_length_mismatch'
+            return geometry_phase
+        index = route_segment_index(float(context.progress_s), boundaries)
+        phase = phases[index] if index >= 0 else None
+        self.hybrid_route_segment_index = index
+        if phase is None:
+            self.hybrid_route_fallback_reason = 'outside_fixed_segments'
+            return geometry_phase
+        self.hybrid_route_phase_active = True
+        self.hybrid_route_fallback_reason = ''
+        return phase
+
+    def path_requires_stanley_only(self) -> bool:
+        path = getattr(self, "latest_target_path", None)
+        prefixes = getattr(self, "stanley_only_path_source_prefixes", ())
+        return path is not None and any(
+            str(path.source).startswith(prefix) for prefix in prefixes
         )
 
     def compute_pp_stanley_steering(self) -> float:
@@ -1585,14 +1812,17 @@ class MotionControlNode(Node):
         self.lookahead_decision = hybrid_decision
         self.lookahead_phase = hybrid_phase
         self.lookahead_curve_active = hybrid_curve_active
-        self.hybrid_phase = hybrid_phase
+        self.hybrid_phase = self.select_hybrid_phase(hybrid_phase)
         self.hybrid_target_pp_weight = hybrid_pp_weight_for_phase(
-            hybrid_phase,
+            self.hybrid_phase,
             self.hybrid_pp_straight_weight,
             self.hybrid_pp_approach_weight,
             self.hybrid_pp_turning_weight,
             self.hybrid_pp_exit_weight,
         )
+        self.stanley_only_path_active = self.path_requires_stanley_only()
+        if self.stanley_only_path_active:
+            self.hybrid_target_pp_weight = 0.0
         max_delta = self.hybrid_blend_rate_per_s / self.control_rate_hz
         self.hybrid_pp_weight += clamp(
             self.hybrid_target_pp_weight - self.hybrid_pp_weight,
@@ -1636,11 +1866,17 @@ class MotionControlNode(Node):
         }
         self.lookahead_phase = path_decision.phase
         self.lookahead_decision = path_decision
+        straight_heading_gain = self.stanley_heading_gain
+        straight_cross_track_gain = self.stanley_cross_track_gain
+        if self.latest_target_path.source in GLOBAL_ROUTE_SOURCES:
+            # Curve values stay; the curve severity blends toward them as before. Avoidance
+            # and held paths keep the fixed gains.
+            straight_heading_gain, straight_cross_track_gain = self.straight_gains(float(speed))
         self.stanley_profile = adaptive_stanley_profile(
             path_decision.curve_severity,
-            self.stanley_heading_gain,
+            straight_heading_gain,
             self.stanley_curve_heading_gain,
-            self.stanley_cross_track_gain,
+            straight_cross_track_gain,
             self.stanley_curve_cross_track_gain,
             self.stanley_cross_track_correction_limit_rad,
             self.stanley_curve_cross_track_correction_limit_rad,
@@ -1677,36 +1913,22 @@ class MotionControlNode(Node):
             if self.latest_vehicle_state is not None
             else self.commanded_speed_mps
         )
-        if self.adaptive_lookahead_enabled:
-            decision = adaptive_lookahead_decision(
-                self.latest_target_path.points,
-                float(speed),
-                self.lookahead_base_m,
-                self.lookahead_gain_s,
-                self.lookahead_min_m,
-                self.lookahead_max_m,
-                self.lookahead_curve_start_1pm,
-                self.lookahead_curve_full_1pm,
-                self.lookahead_near_window_m,
-                self.lookahead_preview_distance_m,
-                self.lookahead_curve_exit_1pm,
-                self.lookahead_curve_speed_gain_s,
-                self.lookahead_curve_minimum_samples,
-                self.lookahead_curve_active,
-            )
-        else:
-            decision = LookaheadDecision(
-                clamp(
-                    self.lookahead_base_m
-                    + max(0.0, float(speed)) * self.lookahead_gain_s,
-                    self.lookahead_min_m,
-                    self.lookahead_max_m,
-                ),
-                "speed_only",
-                0.0,
-                0.0,
-                math.inf,
-            )
+        decision = adaptive_lookahead_decision(
+            self.latest_target_path.points,
+            float(speed),
+            self.lookahead_base_m,
+            self.lookahead_gain_s,
+            self.lookahead_min_m,
+            self.lookahead_max_m,
+            self.lookahead_curve_start_1pm,
+            self.lookahead_curve_full_1pm,
+            self.lookahead_near_window_m,
+            self.lookahead_preview_distance_m,
+            self.lookahead_curve_exit_1pm,
+            self.lookahead_curve_speed_gain_s,
+            self.lookahead_curve_minimum_samples,
+            self.lookahead_curve_active,
+        )
         lookahead = slew_lookahead(
             self.current_lookahead_m,
             decision.distance_m,
@@ -1759,23 +1981,6 @@ class MotionControlNode(Node):
             decision.phase
         )
         status.values = [
-            KeyValue(key="lateral_controller", value=self.lateral_controller),
-            KeyValue(
-                key="ff_reference_curvature_1pm",
-                value=f"{self.ff_reference_curvature_1pm:.5f}",
-            ),
-            KeyValue(
-                key="ff_preview_distance_m",
-                value=f"{self.ff_preview_distance_m:.3f}",
-            ),
-            KeyValue(
-                key="ff_steering_deg",
-                value=f"{math.degrees(self.ff_steering_rad):.3f}",
-            ),
-            KeyValue(
-                key="ff_stanley_feedback_deg",
-                value=f"{math.degrees(self.ff_stanley_feedback_rad):.3f}",
-            ),
             KeyValue(key="phase", value=decision.phase),
             KeyValue(key="lookahead_m", value=f"{decision.distance_m:.3f}"),
             KeyValue(
@@ -1799,29 +2004,10 @@ class MotionControlNode(Node):
                 value=f"{decision.curve_severity:.3f}",
             ),
             KeyValue(
-                key="curvature_speed_limit_mps",
-                value=(
-                    f"{self.curvature_speed_limit_mps:.3f}"
-                    if math.isfinite(self.curvature_speed_limit_mps)
-                    else "inf"
-                ),
-            ),
-            KeyValue(
                 key="raw_steering_deg",
                 value=f"{math.degrees(self.raw_steering_rad):.3f}",
             ),
-            KeyValue(
-                key="straight_corridor_eligible",
-                value=str(self.straight_corridor.eligible).lower(),
-            ),
-            KeyValue(
-                key="straight_corridor_scale",
-                value=f"{self.straight_corridor.scale:.3f}",
-            ),
-            KeyValue(
-                key="straight_predicted_error_m",
-                value=f"{self.straight_corridor.predicted_error_m:.3f}",
-            ),
+            *self.steering_compensation_diagnostics(),
             KeyValue(
                 key="actual_steering_rate_degps",
                 value=f"{math.degrees(self.actual_steering_rate_radps):.3f}",
@@ -1829,6 +2015,18 @@ class MotionControlNode(Node):
             KeyValue(
                 key="steering_tracking_error_deg",
                 value=f"{math.degrees(self.steering_tracking_error_rad):.3f}",
+            ),
+            KeyValue(
+                key="brake_release_pending",
+                value=str(self.brake_release_pending).lower(),
+            ),
+            KeyValue(
+                key="brake_release_elapsed_sec",
+                value=f"{self.brake_release_elapsed_sec:.3f}",
+            ),
+            KeyValue(
+                key="standstill_brake_released",
+                value=str(getattr(self, "standstill_brake_released", False)).lower(),
             ),
             KeyValue(
                 key="stanley_valid",
@@ -1887,12 +2085,22 @@ class MotionControlNode(Node):
                 value=self.hybrid_phase,
             ),
             KeyValue(
+                key="hybrid_route_phase_active",
+                value=str(self.hybrid_route_phase_active).lower(),
+            ),
+            KeyValue(key="hybrid_route_segment_index", value=str(getattr(self, 'hybrid_route_segment_index', -1))),
+            KeyValue(key="hybrid_route_fallback_reason", value=getattr(self, 'hybrid_route_fallback_reason', '')),
+            KeyValue(
                 key="hybrid_pp_weight",
                 value=f"{self.hybrid_pp_weight:.3f}",
             ),
             KeyValue(
                 key="hybrid_target_pp_weight",
                 value=f"{self.hybrid_target_pp_weight:.3f}",
+            ),
+            KeyValue(
+                key="stanley_only_path",
+                value=str(getattr(self, "stanley_only_path_active", False)).lower(),
             ),
             KeyValue(
                 key="hybrid_pp_steering_deg",

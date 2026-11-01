@@ -2,11 +2,11 @@
 from __future__ import annotations
 
 import math
+import re
 
 from geometry_msgs.msg import Point
 from kaiev26_msgs.msg import (
     Centerline,
-    PerceptionObject,
     PerceptionObjectArray,
     RoadSegment,
     RoadSegmentArray,
@@ -29,7 +29,31 @@ OBSERVATION_QOS = QoSProfile(
     reliability=ReliabilityPolicy.RELIABLE,
     durability=DurabilityPolicy.VOLATILE,
 )
-TRAFFIC_LIGHT_LAMP_ON_THRESHOLD = 0.5
+
+
+def light_numeric_id(light_id: str) -> int | None:
+    """Trailing digits of a map light id: the track_id pv26 gives that light (traffic_light_manual_305 -> 305)."""
+    digits = re.search(r"(\d+)$", str(light_id).strip())
+    return int(digits.group(1)) if digits else None
+
+
+def lights_by_map_id(lights, light_ids) -> dict[str, TrafficLightObservation]:
+    """Observation of each map light id, the most confident one when several carry its track_id.
+
+    Perception decides which map light an observation is (track_id) and its state; this only
+    looks the ids up. An unassociated observation has track_id 0 and matches nothing.
+    """
+    wanted = {light_numeric_id(light_id): str(light_id) for light_id in light_ids}
+    wanted.pop(None, None)
+    wanted.pop(0, None)
+    found: dict[str, TrafficLightObservation] = {}
+    for light in lights:
+        light_id = wanted.get(int(light.track_id))
+        if light_id is None:
+            continue
+        if light_id not in found or float(light.confidence) > float(found[light_id].confidence):
+            found[light_id] = light
+    return found
 
 
 class ObservationFrameJoiner:
@@ -82,21 +106,14 @@ class PerceptionGatewayNode(Node):
         self.declare_parameter("publish_rate_hz", 30.0)
         self.declare_parameter("stale_data_sec", 0.35)
         self.declare_parameter("lost_data_sec", 1.0)
-        self.declare_parameter("obstacle_path_half_width_m", 1.4)
-        self.declare_parameter("obstacle_detect_distance_m", 20.0)
-        self.declare_parameter("traffic_light_map_match_distance_m", 2.0)
 
         self.stale_data_sec = float(self.get_parameter("stale_data_sec").value)
         self.lost_data_sec = float(self.get_parameter("lost_data_sec").value)
-        self.obstacle_path_half_width_m = float(self.get_parameter("obstacle_path_half_width_m").value)
-        self.obstacle_detect_distance_m = float(self.get_parameter("obstacle_detect_distance_m").value)
-        self.traffic_light_map_match_distance_m = float(
-            self.get_parameter("traffic_light_map_match_distance_m").value
-        )
 
         self.latest_road_segments: RoadSegmentArray | None = None
         self.latest_centerline: Centerline | None = None
         self.latest_objects: PerceptionObjectArray | None = None
+        self.latest_obstacle_objects: PerceptionObjectArray | None = None
         self.latest_traffic_lights: TrafficLightObservationArray | None = None
         self.latest_route_context: RouteContext | None = None
         self.observation_frames = ObservationFrameJoiner()
@@ -158,6 +175,10 @@ class PerceptionGatewayNode(Node):
         self.accept_observation("centerline", msg)
 
     def on_objects(self, msg: PerceptionObjectArray) -> None:
+        previous = getattr(self, "latest_obstacle_objects", None)
+        stamp = (msg.header.stamp.sec, msg.header.stamp.nanosec)
+        if previous is None or stamp >= (previous.header.stamp.sec, previous.header.stamp.nanosec):
+            self.latest_obstacle_objects = msg
         self.accept_observation("objects", msg)
 
     def on_traffic_lights(self, msg: TrafficLightObservationArray) -> None:
@@ -179,11 +200,11 @@ class PerceptionGatewayNode(Node):
 
     def publish_scene_summary(self) -> None:
         centerline = self.latest_centerline
-        objects = self.latest_objects
+        objects = getattr(self, "latest_obstacle_objects", None) or self.latest_objects
         road_segments = self.latest_road_segments
         traffic_lights = self.latest_traffic_lights
 
-        if centerline is None:
+        if centerline is None and objects is None:
             self.get_logger().warn(
                 "perception gateway waiting for a complete same-stamp perception frame",
                 throttle_duration_sec=2.0,
@@ -223,30 +244,21 @@ class PerceptionGatewayNode(Node):
             summary.lane_width_estimate_m,
         ) = self.estimate_adjacent_lane_centers(road_segments, summary.centerline_points)
 
-        summary.stopline_distance, traffic_state, traffic_conf = self.summarize_traffic_control(
+        (
+            summary.stopline_distance,
+            traffic_state,
+            traffic_conf,
+            traffic_arrow_active,
+        ) = self.summarize_traffic_control(
             traffic_lights if ages["traffic_lights"] <= self.stale_data_sec else None,
             self.latest_route_context,
         )
         summary.traffic_light_state = traffic_state
+        summary.traffic_light_arrow_active = traffic_arrow_active
         summary.traffic_light_confidence = traffic_conf
 
-        (
-            obstacle_on_path,
-            front_obstacle_distance,
-            obstacle_x,
-            obstacle_y,
-            obstacle_length,
-            obstacle_width,
-            risk_level,
-        ) = self.summarize_obstacles(objects)
-        summary.obstacle_on_path = obstacle_on_path
-        summary.front_obstacle_distance = float(front_obstacle_distance)
-        summary.front_obstacle_x = float(obstacle_x)
-        summary.front_obstacle_y = float(obstacle_y)
-        summary.front_obstacle_length = float(obstacle_length)
-        summary.front_obstacle_width = float(obstacle_width)
-        summary.obstacle_risk_level = risk_level
-
+        # Obstacles are judged by the planning engine's obstacle world (all objects in the zone),
+        # so the summary keeps its obstacle fields at their defaults.
         summary.oldest_data_age_ms = float(oldest_age * 1000.0 if oldest_age < INF_DISTANCE else INF_DISTANCE)
         summary.events = self.events_for(summary, ages)
         summary.perception_health = self.health_for(summary, ages)
@@ -260,9 +272,8 @@ class PerceptionGatewayNode(Node):
         debug.data = (
             f"health={summary.perception_health} centerline={summary.centerline_valid} "
             f"oldest_ms={summary.oldest_data_age_ms:.1f} light={traffic_state_name(summary.traffic_light_state)} "
-            f"stopline={summary.stopline_distance:.2f} obstacle={summary.obstacle_on_path} "
-            f"front={summary.front_obstacle_distance:.2f} "
-            f"obs_xy=({summary.front_obstacle_x:.2f},{summary.front_obstacle_y:.2f}) "
+            f"arrow={summary.traffic_light_arrow_active} "
+            f"stopline={summary.stopline_distance:.2f} "
             f"lanes=L:{summary.left_lane_center_valid} R:{summary.right_lane_center_valid}"
         )
         self.debug_pub.publish(debug)
@@ -282,39 +293,28 @@ class PerceptionGatewayNode(Node):
         self,
         traffic_lights: TrafficLightObservationArray | None,
         route: RouteContext | None,
-    ) -> tuple[float, int, float]:
+    ) -> tuple[float, int, float, bool]:
         if (
             route is None
             or not route.route_projection_valid
             or not route.next_stop_line_id
         ):
-            return INF_DISTANCE, SceneSummary.TRAFFIC_UNKNOWN, 0.0
+            return INF_DISTANCE, SceneSummary.TRAFFIC_UNKNOWN, 0.0, False
         stopline_distance = float(route.distance_to_stopline)
         if not math.isfinite(stopline_distance) or stopline_distance >= INF_DISTANCE:
-            return INF_DISTANCE, SceneSummary.TRAFFIC_UNKNOWN, 0.0
-        if traffic_lights is None or not route.next_traffic_light_positions:
-            return stopline_distance, SceneSummary.TRAFFIC_UNKNOWN, 0.0
+            return INF_DISTANCE, SceneSummary.TRAFFIC_UNKNOWN, 0.0, False
+        if traffic_lights is None or not route.next_traffic_light_ids:
+            return stopline_distance, SceneSummary.TRAFFIC_UNKNOWN, 0.0, False
 
-        matches = [
-            (
-                math.hypot(
-                    float(light.position.x) - float(expected.x),
-                    float(light.position.y) - float(expected.y),
-                ),
-                light,
-            )
-            for light in traffic_lights.lights
-            for expected in route.next_traffic_light_positions
-        ]
-        if not matches:
-            return stopline_distance, SceneSummary.TRAFFIC_UNKNOWN, 0.0
-        match_distance, selected = min(matches, key=lambda item: item[0])
-        if match_distance > self.traffic_light_map_match_distance_m:
-            return stopline_distance, SceneSummary.TRAFFIC_UNKNOWN, 0.0
+        seen = lights_by_map_id(traffic_lights.lights, route.next_traffic_light_ids)
+        if not seen:
+            return stopline_distance, SceneSummary.TRAFFIC_UNKNOWN, 0.0, False
+        selected = max(seen.values(), key=lambda light: float(light.confidence))
         return (
             stopline_distance,
             self.map_light_observation(selected),
             float(selected.confidence),
+            self.map_light_arrow_active(selected),
         )
 
     def estimate_adjacent_lane_centers(
@@ -399,76 +399,12 @@ class PerceptionGatewayNode(Node):
 
     @staticmethod
     def map_light_observation(light: TrafficLightObservation) -> int:
-        scores = {
-            "red": float(light.red_score),
-            "yellow": float(light.yellow_score),
-            "green": float(light.green_score),
-            "arrow": float(light.arrow_score),
-        }
-        active = {
-            name
-            for name, score in scores.items()
-            if math.isfinite(score) and score >= TRAFFIC_LIGHT_LAMP_ON_THRESHOLD
-        }
-        if "yellow" in active:
-            return SceneSummary.TRAFFIC_YELLOW
-        if "red" in active and "green" in active:
-            return SceneSummary.TRAFFIC_RED
-        if "red" in active and "arrow" in active:
-            return SceneSummary.TRAFFIC_ARROW
-        if "red" in active:
-            return SceneSummary.TRAFFIC_RED
-        if "green" in active:
-            return SceneSummary.TRAFFIC_GREEN
-        if "arrow" in active:
-            return SceneSummary.TRAFFIC_ARROW
+        """Perception's state for the light, as it is."""
         return PerceptionGatewayNode.map_light_state(light.state)
 
-    def summarize_obstacles(
-        self,
-        objects: PerceptionObjectArray | None,
-    ) -> tuple[bool, float, float, float, float, float, str]:
-        if objects is None:
-            return False, INF_DISTANCE, INF_DISTANCE, 0.0, 0.0, 0.0, "UNKNOWN"
-
-        front_distance = INF_DISTANCE
-        selected_x = INF_DISTANCE
-        selected_y = 0.0
-        selected_length = 0.0
-        selected_width = 0.0
-        obstacle_classes = {
-            PerceptionObject.CLASS_VEHICLE,
-            PerceptionObject.CLASS_BIKE,
-            PerceptionObject.CLASS_PEDESTRIAN,
-            PerceptionObject.CLASS_TRAFFIC_CONE,
-            PerceptionObject.CLASS_OBSTACLE,
-        }
-        for obj in objects.objects:
-            if obj.class_id not in obstacle_classes:
-                continue
-            x = float(obj.pose.position.x)
-            if x < 0.0:
-                continue
-            half_width = max(0.1, float(obj.size.y) * 0.5)
-            lateral_limit = self.obstacle_path_half_width_m + half_width
-            if abs(float(obj.pose.position.y)) > lateral_limit:
-                continue
-            distance = max(0.0, x - max(0.0, float(obj.size.x) * 0.5))
-            if distance < front_distance:
-                front_distance = distance
-                selected_x = x
-                selected_y = float(obj.pose.position.y)
-                selected_length = max(0.0, float(obj.size.x))
-                selected_width = max(0.0, float(obj.size.y))
-
-        obstacle_on_path = front_distance <= self.obstacle_detect_distance_m
-        if not obstacle_on_path:
-            return False, front_distance, selected_x, selected_y, selected_length, selected_width, "LOW"
-        if front_distance <= 2.0:
-            return True, front_distance, selected_x, selected_y, selected_length, selected_width, "HIGH"
-        if front_distance <= 6.0:
-            return True, front_distance, selected_x, selected_y, selected_length, selected_width, "MEDIUM"
-        return True, front_distance, selected_x, selected_y, selected_length, selected_width, "LOW"
+    @staticmethod
+    def map_light_arrow_active(light: TrafficLightObservation) -> bool:
+        return bool(int(light.lamps) & TrafficLightObservation.LAMP_ARROW)
 
     def events_for(self, summary: SceneSummary, ages: dict[str, float]) -> list[str]:
         events = []
@@ -478,8 +414,6 @@ class PerceptionGatewayNode(Node):
             events.append("STOPLINE_NEAR")
         if summary.traffic_light_state == SceneSummary.TRAFFIC_RED and summary.traffic_light_confidence >= 0.5:
             events.append("RED_CONFIRMED")
-        if summary.obstacle_on_path:
-            events.append("OBSTACLE_ON_PATH")
         for name, age in ages.items():
             if age > self.stale_data_sec:
                 events.append(f"{name.upper()}_STALE")

@@ -1,0 +1,89 @@
+# 2026-10-20 Gazebo F3 g98.5 (docs/reports/2026-10-20_gazebo_ab): the 305 left arrow had 4 s
+# left with the line 29 m ahead at 7 m/s; the car kept going and crossed on yellow 0.1 s after the
+# arrow went dark. pv26 sees the 305 arrow in 0-4 % of the frames, so the aligned estimate drives.
+# Approaching on a scheduled permission, the pass or the stop is decided once at the brake point
+# (event_permission arrival verdict): pass only when the front bumper reaches the line 1 s before
+# the permission ends, else stop there as for a red and leave on the next permission.
+# - F3 arrow_end_6s: the line would be reached about 0.4 s after the arrow ends: stop.
+# - F3 arrow_end_8s: the line is reached with 1.6 s of arrow left (g97): pass without braking.
+# - F2 green_end_5s: 10/17 14:33 Z2, green with 2.8 s left 30 m out at 7 m/s
+#   (docs/reports/2026-10-19_signal_event_judgement case 3): the car passed 0.6 s into yellow
+#   on the dilemma rule although it could still stop at the brake point: stop.
+# - F3 slow_arrow_end_stop: at 2.5 m/s the 8 m commit distance comes before the brake point
+#   (5.8 m), so the verdict is made there: the line would be reached 0.5 s into yellow: stop.
+# The estimate counts down like the tracker's (counting) and turned permitted 1 s before the
+# start, so the first sight is not a change. The harness publishes it in place of the tracker node.
+name: ${ev.tag}
+description: a scheduled permission ending before the arrival plus 1 s stops the car at the brake point
+course: final
+speed_mps: "${ev.speed}"
+event: ${ev.id}
+start: {distance_before_line_m: "${ev.start_m}", speed_mps: "${ev.speed}"}
+duration_s: 22
+world:
+  other_lights: [{lamps: [green]}]
+  event_lights:
+    - {lamps: [green]}
+    - {at_s: "${ev.go_end}", lamps: [yellow]}
+    - {after_s: 3.0, lamps: [red]}
+    - {after_s: 6.0, lamps: "${ev.go_lamps}"}
+  event_phases:
+    - {aligned: true, permitted: false, until_change_s: 1.0, lamps: [red]}
+    - {at_s: -1.0, aligned: true, permitted: true, until_change_s: "${ev.go_left}", counting: true, lamps: "${ev.go_lamps}"}
+    - {at_s: "${ev.go_end}", aligned: true, permitted: false, until_change_s: 3.0, counting: true, lamps: [yellow]}
+    - {after_s: 3.0, aligned: true, permitted: false, until_change_s: 6.0, counting: true, lamps: [red]}
+    - {after_s: 6.0, aligned: true, permitted: true, until_change_s: 7.0, counting: true, lamps: "${ev.go_lamps}"}
+expect: "${ev.expect}"
+matrix:
+  ev:
+    - tag: F3_arrow_end_6s_stop
+      id: Z3_SIGNAL_OBEY
+      speed: 7
+      start_m: 45
+      go_lamps: [green, arrow]
+      go_end: 6.0
+      go_left: 7.0
+      expect:
+        - {check: stop_count, event: Z3_SIGNAL_OBEY, count: 1}
+        - {check: stop_position, event: Z3_SIGNAL_OBEY, front_gap_m: [0.0, 8.0]}
+        - {check: no_motion, from: {stop: 1, event: Z3_SIGNAL_OBEY}, to: {light: event, step: 3}}
+        - {check: launch_after, after: {light: event, step: 3}, min_delay_s: 0.4, max_delay_s: 3.0}
+        - {check: no_red_crossing, event: Z3_SIGNAL_OBEY}
+        - {check: passes_line, event: Z3_SIGNAL_OBEY}
+    - tag: F3_arrow_end_8s_pass
+      id: Z3_SIGNAL_OBEY
+      speed: 7
+      start_m: 45
+      go_lamps: [green, arrow]
+      go_end: 8.0
+      go_left: 9.0
+      expect:
+        - {check: stop_count, event: Z3_SIGNAL_OBEY, count: 0}
+        - {check: brake_count, event: Z3_SIGNAL_OBEY, count: 0}
+        - {check: passes_line, event: Z3_SIGNAL_OBEY, by_t: 8.0}
+    - tag: F2_green_end_5s_stop
+      id: Z2_SIGNAL_OBEY
+      speed: 7
+      start_m: 45
+      go_lamps: [green]
+      go_end: 5.0
+      go_left: 6.0
+      expect:
+        - {check: stop_count, event: Z2_SIGNAL_OBEY, count: 1}
+        - {check: stop_position, event: Z2_SIGNAL_OBEY, front_gap_m: [0.0, 8.0]}
+        - {check: launch_after, after: {light: event, step: 3}, min_delay_s: 0.4, max_delay_s: 3.0}
+        - {check: no_red_crossing, event: Z2_SIGNAL_OBEY}
+        - {check: passes_line, event: Z2_SIGNAL_OBEY}
+    - tag: F3_slow_arrow_end_stop
+      id: Z3_SIGNAL_OBEY
+      speed: 2.5
+      start_m: 20
+      go_lamps: [green, arrow]
+      go_end: 7.5
+      go_left: 8.5
+      expect:
+        - {check: stop_count, event: Z3_SIGNAL_OBEY, count: 1}
+        - {check: stop_position, event: Z3_SIGNAL_OBEY, front_gap_m: [0.0, 8.0]}
+        - {check: launch_after, after: {light: event, step: 3}, min_delay_s: 0.4, max_delay_s: 3.0}
+        - {check: no_red_crossing, event: Z3_SIGNAL_OBEY}
+        - {check: passes_line, event: Z3_SIGNAL_OBEY}

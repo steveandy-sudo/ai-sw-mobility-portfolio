@@ -1,7 +1,8 @@
-"""Rich terminal UI for the four K-City cone-course experiments."""
+"""Rich terminal UI for the K-City cone-course experiments."""
 
 import argparse
 from contextlib import contextmanager
+from dataclasses import replace
 import fcntl
 import os
 from pathlib import Path
@@ -23,7 +24,7 @@ from rich.table import Table
 from rich.text import Text
 
 from .trial_processes import DEFAULT_RECORDS_ROOT, ProcessManager
-from .trial_profiles import PROFILES, TrialSettings, default_model_path
+from .trial_profiles import TrialSettings
 from .trial_runtime import TrialNode
 
 
@@ -40,7 +41,7 @@ def keyboard():
             pass
 
 
-def _dashboard(snapshot, selection, launch_dir, speed_text=None, message='',
+def _dashboard(snapshot, selection, launch_dir, edit_field=None, edit_text='', message='',
                records_root=DEFAULT_RECORDS_ROOT):
     speed = '—' if snapshot['speed'] is None else f"{snapshot['speed']:.1f} km/h"
     countdown = (f" · {snapshot['countdown']}초" if snapshot['countdown'] is not None
@@ -52,19 +53,22 @@ def _dashboard(snapshot, selection, launch_dir, speed_text=None, message='',
         f"({snapshot['path_points']} points)   추종 {snapshot['tracking_reason']}   "
         f"빨간선 {snapshot['red_state']}", style='bold')
 
-    choices = []
-    for number, profile in PROFILES.items():
-        missing = profile.missing_launches(launch_dir)
-        availability = '실행 가능' if not missing else '미구현'
-        marker = '▶ ' if number == selection.scenario else '  '
-        choices.append(f'{marker}[{number}] {profile.name}  [{availability}]')
-    settings = Text(
-        '\n'.join(choices) + '\n'
-        + f'최고 목표속도 {selection.target_speed_kph:g} km/h\n'
-        + '1–4 선택   V 최고속도   R Run   S / Space Stop   Q 종료')
-    if speed_text is not None:
+    missing = selection.profile.missing_launches(launch_dir)
+    availability = '실행 가능' if not missing else '미구현'
+    settings = Text(f'{selection.profile.name} (고정)  [{availability}]\n'
+                    + f'최고 목표속도 {selection.target_speed_kph:g} km/h'
+                    + f'   속도명령 증가율 {selection.acceleration_mps2:.1f} m/s² (고정)'
+                    + f'   빨간선 선행 제동 {selection.red_brake_lead_m:g} m\n'
+                    + ('E-stop: USE (사람이 E-stop으로 정지, 빨간선에서 감속·브레이크 없음)'
+                       if selection.estop_use else
+                       'E-stop: NOT-USE (빨간선에서 차량 브레이크 자동 체결)'))
+    settings.append('\nV 최고속도   B 제동거리   E E-stop USE/NOT-USE'
+                    '   R Run   S / Space Stop   Q 종료')
+    if edit_field is not None:
+        label = {'target_speed_kph': '최고 목표속도',
+                 'red_brake_lead_m': '빨간선 선행 제동거리'}[edit_field]
         settings.append(
-            '\n최고 목표속도 입력: ' + speed_text + '▌  (Enter 적용 / Esc 취소)',
+            '\n' + label + ' 입력: ' + edit_text + '▌  (Enter 적용 / Esc 취소)',
             style='bold cyan')
     if message:
         settings.append('\n' + message, style='yellow')
@@ -95,16 +99,12 @@ def _dashboard(snapshot, selection, launch_dir, speed_text=None, message='',
 
 def _parser():
     parser = argparse.ArgumentParser(
-        description='K-City 라바콘 인지/제어 4조합 실차 시험 TUI')
-    parser.add_argument(
-        '--model-path',
-        default=default_model_path(),
-        help='YOLO best.pt absolute path (or set KAIEV26_CONE_MODEL)')
+        description='K-City 라바콘 인지/제어 실차 시험 TUI')
     parser.add_argument('--records-root', type=Path, default=DEFAULT_RECORDS_ROOT)
     return parser
 
 
-def main(model_path, records_root=DEFAULT_RECORDS_ROOT):
+def main(records_root=DEFAULT_RECORDS_ROOT):
     console = Console()
     if not sys.stdin.isatty():
         console.print('대화형 터미널에서 cone_trial_tui를 실행하세요.')
@@ -139,14 +139,15 @@ def main(model_path, records_root=DEFAULT_RECORDS_ROOT):
         spin_thread = threading.Thread(target=executor.spin, name='cone-trial-ros')
         spin_thread.start()
 
-        selection = TrialSettings(2, 5.0, str(Path(model_path).expanduser()))
-        speed_text = None
+        selection = TrialSettings()
+        edit_field = None
+        edit_text = ''
         message = ''
         with keyboard(), Live(console=console, screen=True, auto_refresh=False) as live:
             while not quitting.is_set():
                 live.update(_dashboard(
                     node.snapshot(selection), selection, node.launch_dir,
-                    speed_text, message, records_root), refresh=True)
+                    edit_field, edit_text, message, records_root), refresh=True)
                 readable, _, _ = select.select([sys.stdin], [], [], 0.2)
                 if not readable:
                     continue
@@ -161,32 +162,32 @@ def main(model_path, records_root=DEFAULT_RECORDS_ROOT):
                 if char.lower() == 's' or char == ' ':
                     node.request_stop()
                     continue
-                if speed_text is not None:
+                if edit_field is not None:
                     if char in '\r\n':
                         try:
-                            selection = TrialSettings(
-                                selection.scenario, float(speed_text), selection.model_path)
-                            speed_text = None
+                            selection = replace(selection, **{edit_field: float(edit_text)})
+                            edit_field = None
+                            edit_text = ''
                             message = ''
                         except ValueError as error:
                             message = str(error)
                     elif char == '\x1b':
-                        speed_text = None
+                        edit_field = None
+                        edit_text = ''
                     elif char in ('\x7f', '\b'):
-                        speed_text = speed_text[:-1]
+                        edit_text = edit_text[:-1]
                     elif char in '0123456789.':
-                        speed_text += char
+                        edit_text += char
                     continue
                 if node.busy:
                     message = '실행·저장이 끝난 뒤 설정을 바꿀 수 있습니다.'
                     continue
-                if char in '1234':
-                    selection = TrialSettings(
-                        int(char), selection.target_speed_kph, selection.model_path)
-                    missing = selection.profile.missing_launches(node.launch_dir)
-                    message = ('현재 미구현: ' + ', '.join(missing)) if missing else ''
-                elif char.lower() == 'v':
-                    speed_text = ''
+                if char.lower() == 'v':
+                    edit_field, edit_text = 'target_speed_kph', ''
+                elif char.lower() == 'b':
+                    edit_field, edit_text = 'red_brake_lead_m', ''
+                elif char.lower() == 'e':
+                    selection = replace(selection, estop_use=not selection.estop_use)
                 elif char.lower() == 'r':
                     node.request_run(selection)
                     message = ''
@@ -231,7 +232,7 @@ def main(model_path, records_root=DEFAULT_RECORDS_ROOT):
 
 def cli(argv=None):
     args = _parser().parse_args(argv)
-    return main(args.model_path, args.records_root)
+    return main(args.records_root)
 
 
 if __name__ == '__main__':

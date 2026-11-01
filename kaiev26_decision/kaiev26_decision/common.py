@@ -1,11 +1,12 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 import math
 from typing import Iterable
 
 from builtin_interfaces.msg import Time
 from geometry_msgs.msg import Point
+from kaiev26_msgs.msg import TargetSpeed
 import rclpy
 from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
@@ -37,30 +38,21 @@ def spin_until_shutdown(node: Node) -> None:
 
 
 @dataclass(frozen=True)
-class DecisionCommand:
-    safety_state: str = "NORMAL"
-    active_behavior: str = "LANE_FOLLOW"
-    fsm_state: str = "LANE_GOOD"
-    selected_reason: str = "default"
-    need_stop: bool = False
-    target_speed_limit_mps: float = 0.0
-    path_request: str = "CENTERLINE"
-    stop_target_distance: float = INF_DISTANCE
-    constraints: list[str] = field(default_factory=list)
-    risk_level: str = "LOW"
+class StoppingModel:
+    """Service-brake stopping distance used by the stop-point machine.
 
+    d(v) = v * t_d + v**2 / (2 * a_b). Defaults are the 2026-10-11 vehicle brake fit;
+    the node passes the configured values. Distances are measured at the front bumper.
+    """
 
-@dataclass(frozen=True)
-class ScenarioChoice:
-    behavior: str
-    reason: str
-    stage_id: str = ""
-    event_id: str = ""
-    stop_line_id: str = ""
-    hold_sec: float = 0.0
-    arrow_maneuver: str = ""
-    brake_trigger_waypoint: int | None = None
-    brake_trigger_route_s: float | None = None
+    brake_delay_sec: float = 0.70
+    brake_decel_mps2: float = 3.9
+
+    def distance_m(self, speed_mps: float) -> float:
+        speed = abs(float(speed_mps))
+        if not math.isfinite(speed):
+            return INF_DISTANCE
+        return speed * self.brake_delay_sec + speed * speed / (2.0 * self.brake_decel_mps2)
 
 
 def clamp(value: float, lower: float, upper: float) -> float:
@@ -78,48 +70,11 @@ def polyline_length(points: Iterable[Point]) -> float:
     return sum(distance_2d(start, end) for start, end in zip(items, items[1:]))
 
 
-def min_forward_x(points: Iterable[Point], max_distance: float = INF_DISTANCE) -> float:
-    values = [point.x for point in points if 0.0 <= point.x <= max_distance]
-    if not values:
-        return INF_DISTANCE
-    return min(values)
-
-
 def stamp_age_sec(now: RosTime, stamp: Time) -> float:
     if stamp.sec == 0 and stamp.nanosec == 0:
         return INF_DISTANCE
     age = now - RosTime.from_msg(stamp)
     return max(0.0, age.nanoseconds * 1.0e-9)
-
-
-def normalize_quaternion(
-    x: float,
-    y: float,
-    z: float,
-    w: float,
-) -> tuple[float, float, float, float] | None:
-    values = (float(x), float(y), float(z), float(w))
-    if not all(math.isfinite(value) for value in values):
-        return None
-    norm = math.sqrt(sum(value * value for value in values))
-    if norm < 1.0e-6:
-        return None
-    return tuple(value / norm for value in values)
-
-
-def quaternion_yaw(quaternion) -> float | None:
-    normalized = normalize_quaternion(
-        quaternion.x,
-        quaternion.y,
-        quaternion.z,
-        quaternion.w,
-    )
-    if normalized is None:
-        return None
-    x, y, z, w = normalized
-    siny_cosp = 2.0 * (w * z + x * y)
-    cosy_cosp = 1.0 - 2.0 * (y * y + z * z)
-    return math.atan2(siny_cosp, cosy_cosp)
 
 
 def require_finite_parameter(
@@ -152,3 +107,12 @@ def traffic_state_name(state: int) -> str:
         4: "ARROW",
     }
     return names.get(int(state), "UNKNOWN")
+
+
+def stop_command(target: TargetSpeed, distance_m: float = 0.0) -> TargetSpeed:
+    """The only producer of a stop in TargetSpeed: need_stop, target 0, distance (0 = brake now)."""
+    target.need_stop = True
+    target.target_speed_mps = 0.0
+    distance = float(distance_m)
+    target.stop_target_distance = max(0.0, distance) if math.isfinite(distance) else 0.0
+    return target

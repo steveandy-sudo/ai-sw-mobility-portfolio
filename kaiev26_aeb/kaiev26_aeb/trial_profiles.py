@@ -1,18 +1,23 @@
-"""The four K-City cone-course perception and tracking combinations."""
+"""K-City brake-inspection cases and run settings."""
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 import math
-import os
 from pathlib import Path
 
 
 COUNTDOWN_SEC = 5.0
+TRIAL_ACCELERATION_MPS2 = 1.0
+# The trial TUI runs the straight brake course with Stanley only; Pure Pursuit stays in the launch.
+TRIAL_SCENARIO = 2
 
 
-def default_model_path() -> str:
-    return os.environ.get(
-        'KAIEV26_CONE_MODEL',
-        str(Path.home() / 'KAI_ws/models/cone_yolo/yolov8n-cone.pt'))
+def installed_cone_engine_path() -> Path | None:
+    try:
+        from ament_index_python.packages import get_package_share_directory
+        path = Path(get_package_share_directory('cone_perception')) / 'models/yolov8n-cone.engine'
+        return path if path.is_file() else None
+    except (ImportError, LookupError, OSError):
+        return None
 
 
 @dataclass(frozen=True)
@@ -40,17 +45,11 @@ class TrialProfile:
 
 PROFILES = {
     1: TrialProfile(
-        1, 'fusion', 'stanley', '라바콘 퓨전', 'Stanley',
-        'cone_path_node', 'cone_stanley_node'),
+        1, 'colored', 'pure_pursuit', '컬러 콘 3D 인지', 'Pure Pursuit',
+        'cone_colored_path_node', 'cone_pursuit_node'),
     2: TrialProfile(
-        2, 'fusion', 'pure_pursuit', '라바콘 퓨전', 'Pure Pursuit',
-        'cone_path_node', 'cone_pursuit_node'),
-    3: TrialProfile(
-        3, 'yolo', 'stanley', '라바콘 YOLO', 'Stanley',
-        'cone_yolo_path_node', 'cone_stanley_node'),
-    4: TrialProfile(
-        4, 'yolo', 'pure_pursuit', '라바콘 YOLO', 'Pure Pursuit',
-        'cone_yolo_path_node', 'cone_pursuit_node'),
+        2, 'colored', 'stanley', '컬러 콘 3D 인지', 'Stanley',
+        'cone_colored_path_node', 'cone_stanley_node'),
 }
 
 
@@ -58,21 +57,30 @@ def profile_for(scenario: int) -> TrialProfile:
     try:
         return PROFILES[int(scenario)]
     except (KeyError, TypeError, ValueError) as error:
-        raise ValueError('시나리오는 1..4입니다') from error
+        raise ValueError('Case는 1 또는 2입니다') from error
+
+
+def default_target_speed_kph(scenario: int) -> float:
+    profile_for(scenario)
+    return 30.0
 
 
 @dataclass(frozen=True)
 class TrialSettings:
-    scenario: int = 2
-    target_speed_kph: float = 5.0
-    model_path: str = ''
+    scenario: int = TRIAL_SCENARIO
+    target_speed_kph: float = 30.0
+    acceleration_mps2: float = field(default=TRIAL_ACCELERATION_MPS2, init=False)
+    red_brake_lead_m: float = 5.0
+    # USE: a person stops the car with the E-stop at the red line; the controller neither slows
+    # nor brakes for it. NOT-USE (default): the controller stops and brakes at the red line.
+    estop_use: bool = False
 
     def __post_init__(self):
         profile_for(self.scenario)
         if not math.isfinite(self.target_speed_kph) or self.target_speed_kph <= 0:
             raise ValueError('최고 목표속도는 0보다 큰 유한한 값이어야 합니다')
-        if not self.model_path:
-            raise ValueError('YOLO 모델 경로가 필요합니다')
+        if not math.isfinite(self.red_brake_lead_m) or self.red_brake_lead_m < 0:
+            raise ValueError('선행 제동거리는 0 이상이어야 합니다')
 
     @property
     def profile(self) -> TrialProfile:
@@ -86,5 +94,7 @@ class TrialSettings:
             'controller': self.profile.controller,
             'countdown_sec': COUNTDOWN_SEC,
             'command_topic': '/planning/command',
+            'estop': 'USE' if self.estop_use else 'NOT-USE',
+            'vehicle_brake': not self.estop_use,
         })
         return result

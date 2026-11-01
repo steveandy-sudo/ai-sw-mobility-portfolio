@@ -1,0 +1,36 @@
+# Left-turn arrow detected with short dropouts: 0.8 s red+arrow, 0.15 s red only, repeating.
+# after_stop: red until 2 s after the stop, then the flickering arrow. approach: flickering arrow
+# from the start. Either way at most one stop and one brake application, and the car passes.
+name: ${ev.tag}_${mode.tag}_v${speed}_${brake.tag}
+description: a flickering arrow does not cause stop/launch cycles
+course: final
+speed_mps: ${speed}
+event: ${ev.id}
+start: {distance_before_line_m: 45, speed_mps: "${speed}"}
+vehicle: {brake_decel_mps2: "${brake.decel}"}
+duration_s: 22
+world:
+  other_lights: [{lamps: [green]}]
+  event_lights: "${mode.lights}"
+expect:
+  - {check: stop_count, event: "${ev.id}", max: "${mode.max_stops}"}
+  - {check: brake_count, event: "${ev.id}", max: "${mode.max_stops}"}
+  - {check: passes_line, event: "${ev.id}"}
+matrix:
+  ev:
+    - {tag: F3, id: Z3_SIGNAL_OBEY}
+    - {tag: F4, id: Z4_SIGNAL_OBEY}
+  mode:
+    - tag: after_stop
+      max_stops: 1
+      lights:
+        - {lamps: [red]}
+        - {stopped_for_s: 2.0, cycle: [{lamps: [red, arrow], s: 0.8}, {lamps: [red], s: 0.15}]}
+    - tag: approach
+      max_stops: 1
+      lights:
+        - {cycle: [{lamps: [red, arrow], s: 0.8}, {lamps: [red], s: 0.15}]}
+  speed: [7, 8]
+  brake:
+    - {tag: b39, decel: 3.9}
+    - {tag: b77, decel: 7.7}

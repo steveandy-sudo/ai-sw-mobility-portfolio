@@ -1,0 +1,38 @@
+# Stopped at red, pv26 then reads a permitted light that is not there: a false arrow (red + arrow,
+# as in the real bags at F3 light 305 and in Gazebo at F4 light 375) or, on a straight event, a
+# false green. The signal phase tracker is aligned and says not permitted, so the car keeps
+# holding (owner, 2026-10-16). When the estimate turns permitted, or is no longer aligned or fresh
+# (0.5 s), the usual rule applies: 0.4 s confirmation, launch, pass, no brake again (D4).
+# The harness publishes the phase estimate in place of the tracker node.
+name: ${ev.tag}_${lift.tag}
+description: a permitted reading while stopped does not release while the aligned phase estimate forbids it
+course: ${ev.course}
+speed_mps: 8
+event: ${ev.id}
+start: {distance_before_line_m: "${ev.start}", speed_mps: 8}
+duration_s: 28
+world:
+  other_lights: [{lamps: [green]}]
+  event_lights:
+    - {lamps: [red]}
+    - {stopped_for_s: 2.0, lamps: "${ev.go}"}
+  event_phases:
+    - {aligned: true, permitted: false}
+    - "${lift.phase}"
+expect:
+  - {check: stop_count, event: "${ev.id}", count: 1}
+  - {check: brake_held, from: {stop: 1, event: "${ev.id}", plus_s: 0.5}, to: {phase: event, step: 1}}
+  - {check: no_motion, from: {stop: 1, event: "${ev.id}"}, to: {phase: event, step: 1}}
+  - {check: launch_after, after: {phase: event, step: 1}, min_delay_s: 0.4, max_delay_s: "${lift.max_delay}"}
+  - {check: brake_count, event: "${ev.id}", from: {stop: 1, event: "${ev.id}", at: end}, count: 0}
+  - {check: passes_line, event: "${ev.id}"}
+matrix:
+  ev:
+    - {tag: F3, course: final, start: 45, id: Z3_SIGNAL_OBEY, go: [red, arrow]}
+    - {tag: F4, course: final, start: 45, id: Z4_SIGNAL_OBEY, go: [red, arrow]}
+    - {tag: F2, course: final, start: 45, id: Z2_SIGNAL_OBEY, go: [green]}
+    - {tag: Q4, course: qualifying, start: 36, id: Z4_SIGNAL_OBEY, go: [green]}
+  lift:
+    - {tag: permitted, max_delay: 3.0, phase: {stopped_for_s: 8.0, aligned: true, permitted: true, until_change_s: 30.0}}
+    - {tag: unaligned, max_delay: 3.0, phase: {stopped_for_s: 8.0, aligned: false, permitted: false}}
+    - {tag: stale, max_delay: 3.5, phase: {stopped_for_s: 8.0, unpublished: true}}

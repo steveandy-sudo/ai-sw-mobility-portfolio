@@ -1,0 +1,30 @@
+# The real signal phase tracker at F4 (light 375, map program final_second_left: red 60 s,
+# red+arrow 37 s, yellow 3 s). Stopped on red, pv26 sees the yellow of cycle 97-100 and the red
+# after it, which aligns the tracker on the round lamps. pv26 then reads a false red+arrow for 6 s
+# while the program still shows red only, as in Gazebo at light 375 and in the real bags at light
+# 305. The tracker aligns only from the round lamps (owner, 2026-10-16), so it stays aligned and not
+# permitted and the car keeps holding. The car launches when the program's own arrow comes, 60 s
+# after the red edge, with the usual 0.4 s confirmation, and does not brake again (D4).
+name: F4
+description: a false arrow does not pull the real phase tracker off its round-lamp alignment
+course: final
+speed_mps: 8
+event: Z4_SIGNAL_OBEY
+start: {distance_before_line_m: 45, speed_mps: 8}
+duration_s: 85
+world:
+  other_lights: [{lamps: [green]}]
+  event_lights:
+    - {lamps: [red]}
+    - {stopped_for_s: 1.0, lamps: [yellow]}
+    - {after_s: 3.0, lamps: [red]}
+    - {after_s: 2.0, lamps: [red, arrow]}
+    - {after_s: 6.0, lamps: [red]}
+    - {after_s: 52.0, lamps: [red, arrow]}
+expect:
+  - {check: stop_count, event: Z4_SIGNAL_OBEY, count: 1}
+  - {check: brake_held, from: {stop: 1, event: Z4_SIGNAL_OBEY, plus_s: 0.5}, to: {light: event, step: 5}}
+  - {check: no_motion, from: {stop: 1, event: Z4_SIGNAL_OBEY}, to: {light: event, step: 5}}
+  - {check: launch_after, after: {light: event, step: 5}, min_delay_s: 0.4, max_delay_s: 3.0}
+  - {check: brake_count, event: Z4_SIGNAL_OBEY, from: {stop: 1, event: Z4_SIGNAL_OBEY, at: end}, count: 0}
+  - {check: passes_line, event: Z4_SIGNAL_OBEY}

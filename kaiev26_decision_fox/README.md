@@ -80,7 +80,7 @@ ros2 topic hz /planning/route_context
 ros2 topic hz /planning/readiness_status
 ros2 topic hz /planning/command
 ros2 topic hz /vehicle/command
-ros2 node list | rg foxglove
+ros2 node list | grep foxglove
 ```
 
 MCAP 화면이 비면 해당 토픽이 기록됐는지 확인한다.
@@ -97,6 +97,6 @@ Foxglove는 E-Stop 대체 수단이 아니다. 같은 `8765` 포트의 bridge를
 cd ~/KAI_ws
 source /opt/ros/humble/setup.bash
 source install/setup.bash
-colcon test --packages-select kaiev26_decision_fox
-colcon test-result --verbose
+PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 colcon test --packages-select kaiev26_decision_fox
+colcon test-result --test-result-base build/kaiev26_decision_fox
 ```

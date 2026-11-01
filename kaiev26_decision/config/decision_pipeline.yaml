@@ -3,9 +3,6 @@ kaiev26_perception_gateway:
     use_sim_time: true
     publish_rate_hz: 30.0
     stale_data_sec: 0.35
-    obstacle_path_half_width_m: 1.4
-    obstacle_detect_distance_m: 20.0
-    traffic_light_map_match_distance_m: 2.0
 
 kaiev26_route_zone_manager:
   ros__parameters:
@@ -17,6 +14,10 @@ kaiev26_route_zone_manager:
     base_frame_id: base_footprint
     route_config: ""
     lookahead_distance_m: 18.0
+    # Provisional field-test baseline (2026-10-23), not a validated optimum.
+    # Keep adjustable after recorded clearance, return length and tracking review.
+    # This is the full local-path horizon, not the distance to return after a row.
+    obstacle_lookahead_distance_m: 45.0
     local_path_spacing_m: 1.0
     max_projection_distance_m: 15.0
     progress_search_window_m: 35.0
@@ -25,46 +26,164 @@ kaiev26_route_zone_manager:
     start_snap_progress_m: 35.0
     initial_projection_max_heading_error_rad: 0.7
     initial_projection_heading_weight_m: 4.0
-    finish_zone_distance_m: 4.0
+    local_projection_max_heading_error_rad: 1.5707963267948966  # 90 deg: wrong route leg
+    projection_heading_min_speed_mps: 1.0
+    # from_start: until the progress commits, match on the route from s = 0 by position only.
+    # resume: heading-aware search over the whole route. The TUI passes its selection.
+    start_mode: resume
+    # Covers the finish brake point (d_stop + front overhang - overrun) up to about 13.5 m/s
+    # (the final F_STAGE_6 course speed 13 m/s brakes 27.8 m before the line).
+    finish_zone_distance_m: 30.0
     intersection_zone_radius_m: 8.0
 
 kaiev26_main_planning_engine:
   ros__parameters:
     use_sim_time: true
-    # 2026-09-05 K-City manual runs: qualifying cruise median 3.27 m/s.
-    # Launch files override final-course cruise to 3.5 m/s.
-    base_speed_mps: 3.2
-    degraded_speed_mps: 2.5
-    static_stop_enabled: false
+    # Direct-launch fallback. The TUI passes its selected course speed explicitly.
+    base_speed_mps: 4.0
+    planning_rate_hz: 30.0
+    planning_deadline_ms: 50.0
+    # true (2026-10-25): curve cap back on, min(course speed * speed_scale, sqrt(lateral accel * radius)).
+    # (2026-10-24 it was false: curves ran at the same course speed as straights.)
+    # The two values below only apply when it is true.
+    curve_speed_enabled: true
+    # Each curve zone is capped at sqrt(lateral accel * radius) and slowed into at the car's
+    # real deceleration (reports 261022_경로추종기_속도별_재검토). 6.0 (about 0.6 G, 2026-10-24) in
+    # place of 3.5: the car holds 1 G laterally; the same value as obstacle_lateral_accel_mps2.
+    curve_lateral_accel_mps2: 6.0
+    curve_approach_decel_mps2: 0.5
+    # Inputs of the input state: route context and vehicle state. Perception is not one.
+    route_stale_sec: 0.5
+    vehicle_stale_sec: 0.25
+    # Stale input: speed 0 at once, brake after this long, kept until stopped (D2).
+    input_loss_brake_delay_sec: 1.0
     static_stop_stopped_speed_mps: 0.1
-    obstacle_slow_speed_mps: 2.2
-    obstacle_return_speed_mps: 2.6
-    stopline_approach_distance_m: 18.0
+    # A signal event reads only its own lights; older observations read as UNKNOWN.
+    traffic_lights_stale_sec: 0.35
+    # Phase estimates older than this are not used.
+    signal_phase_stale_sec: 0.5
+    # Signal input (signal_schedule.py): an aligned, fresh phase estimate of the own light is the
+    # input of the event permission; the camera decides within the margin of a scheduled change,
+    # rejects a scheduled permission on a sure opposite (a circle the schedule does not light, arrow
+    # off) for reject_frames and reject_sec, and drops the schedule for the approach when it
+    # contradicts it for the distrust times. K-City signals run on UTC (docs/reports/2026-10-17_*).
+    signal_schedule_transition_margin_sec: 1.0
+    signal_schedule_reject_frames: 10
+    signal_schedule_reject_sec: 0.5
+    signal_schedule_distrust_opposite_sec: 3.0
+    signal_schedule_distrust_go_sec: 2.0
+    # Stopped at the event (2026-10-17 kty 17d49de): a scheduled permission launches the car only
+    # with permission probability >= 0.9 and >= 4 s of it left, else the camera decides, and a
+    # permission ending within 4 s never launches it (3.2 s launch to the line + 0.5 s theta); the
+    # schedule holds back a permission the camera reads for at most one 100 s program cycle per
+    # stop, then the camera decides for the rest of the approach. Zero limit: none.
+    signal_schedule_launch_min_probability: 0.9
+    signal_schedule_launch_min_remaining_sec: 4.0
+    signal_schedule_withhold_limit_sec: 100.0
     traffic_release_confirm_sec: 0.4
-    yellow_stop_decel_mps2: 2.0
-    yellow_reaction_time_sec: 0.25
-    signal_pass_line_jump_m: 3.0
-    comfortable_decel_mps2: 1.4
-    pre_brake_decel_distance_m: 6.0
+    intersection_escape_unknown_confirm_sec: 1.0
+    # After a confirmed permission, UNKNOWN counts as a stop signal only after this long.
+    # At an arrow event the same holds for a lamp read with the arrow off (one timer for both).
+    signal_unknown_after_permission_confirm_sec: 0.3
+    # Stopped at the line with UNKNOWN only: depart after this long (100 s cycle + 10 s). Zero disables.
+    signal_unknown_wait_limit_sec: 110.0
+    # Approaching on a scheduled permission, the pass or the stop is decided once at the brake
+    # point (or the commit distance, if first): pass when the front bumper reaches the line this
+    # long before the permission ends, else stop at the brake point (K-City clock within about
+    # 1 s of the UTC 100 s grid, theta +-0.5 s).
+    signal_arrival_margin_sec: 1.0
+    pre_brake_decel_distance_m: 8.0
     brake_entry_speed_mps: 2.0
+    # Service brake fit on 2026-10-11: d_stop(v) = v * delay + v^2 / (2 * decel), front bumper.
+    brake_delay_sec: 0.70
+    brake_decel_mps2: 3.9
+    # Brake when the front bumper is within d_stop(v) + margin of the stop line.
+    stopline_brake_margin_m: 1.0
+    # Before the confirmation of a camera reading, an UNKNOWN this short pauses it instead of
+    # restarting it; UNKNOWN itself never permits. An arrow-off still restarts it.
+    signal_unknown_before_permission_grace_sec: 0.3
+    # The four finish_* values below are for a route without a surveyed finish line (the route
+    # end is the line). The K-City policies have one (finish_line_route_s) and use the next two.
+    finish_approach_distance_m: 20.0
+    finish_slow_speed_mps: 0.6
+    finish_stop_distance_m: 1.0
+    # The front bumper stops within this distance past the finish line.
+    finish_overrun_m: 5.0
+    # Surveyed line (2026-10-25, GNSS antenna on the line): the course speed holds until the
+    # antenna (0.426 m ahead of the rear axle, tf base_link -> gps) is this margin past the line,
+    # then the car brakes; no slow-down before it. 2.0 m (2026-10-25): a sure pass, and the road
+    # past the line is long and a person can still brake and steer.
+    finish_line_reference_forward_m: 0.426
+    finish_line_pass_margin_m: 2.0
+    # Planned stop (signal, timed stop, finish) held at standstill this long: motion control
+    # releases the brake servo to spare it and brakes again if the car rolls. 0 keeps the brake.
+    standstill_brake_release_sec: 2.0
     vehicle_front_overhang_m: 1.98
     vehicle_width_m: 1.18
-    obstacle_clearance_m: 0.30
-    obstacle_lane_departure_allowed: true
-    obstacle_side_deadband_m: 0.30
-    obstacle_preferred_side: left
-    obstacle_transition_length_m: 10.0
-    obstacle_return_length_m: 10.0
-    stopline_clearance_m: 1.5
-    route_rejoin_cross_track_m: 0.8
-    route_rejoin_heading_error_rad: 0.45
-    route_rejoin_exit_cross_track_m: 0.30
-    route_rejoin_exit_heading_error_rad: 0.15
-    rejoin_speed_min_mps: 1.4
-    rejoin_speed_max_mps: 2.6
-    rejoin_slow_cross_track_m: 2.5
-    rejoin_slow_heading_error_rad: 0.8
-    planning_deadline_ms: 50.0
+    # Kept obstacles are planned without fresh perception after this long (committed path only).
+    objects_stale_sec: 0.5
+    # The obstacle zone speed cap and its pre-slow are in the course policy (obstacle_zone).
+    # Bypass speed at obstacle_slow_clearance_m and below, outside the lane limits, and with rows
+    # ahead but no path; it rises linearly to the zone speed at obstacle_clearance_m.
+    obstacle_fallback_speed_mps: 1.6
+    # Cap while a bypass path is followed (main obstacle_slow_speed_mps). The final's zone cap is
+    # the same 5.0; the Midan zone has none (15 m/s), so this is the slow-down once drums are seen.
+    # 10/23 Midan 1452/1456 avoided at these speeds (valid path up to 5 m/s, forced 3 m/s).
+    obstacle_bypass_speed_mps: 5.0
+    # Forced (best-effort) bypass path speed; -1 uses obstacle_fallback_speed_mps. Also the floor of
+    # the clearance cap, so at 5.0 (= obstacle_bypass_speed_mps) the gap no longer slows a valid
+    # path either (10/24: 3.0 here held the final zone at 4.0 for a 0.38 m gap; Midan 10/23 forced 3.0).
+    obstacle_forced_speed_mps: 5.0
+    obstacle_slow_clearance_m: 0.25
+    # Bypass path curve speed is the median over this window. Zero disables.
+    obstacle_curve_speed_window_sec: 0.5
+    # Bypass path curvature cap sqrt(a / curvature). 10/24 final 1241: 1.4 held the zone at 2.6 m/s
+    # (radius 4.9 m); 6.0 keeps 5.0 m/s down to a 4.2 m radius.
+    obstacle_lateral_accel_mps2: 6.0
+    # Bypass speed limit from the path's steering change; <= 0 has none (10/23 Midan: 60 deg/s held
+    # the bypass at 1-2 m/s, below the lateral acceleration limit). The change is taken over
+    # obstacle_steering_gradient_window_m, not between neighbouring 0.25 m samples.
+    obstacle_max_steering_rate_deg_s: 0.0
+    obstacle_steering_gradient_window_m: 1.0
+    # Target body-obstacle clearance: the search takes the largest clearance up to this value.
+    obstacle_clearance_m: 0.50
+    # Every row may be passed with the body this far over the centre line; never over the curb side.
+    obstacle_centerline_departure_m: 0.5
+    obstacle_transition_length_m: 12.0
+    obstacle_return_length_m: 12.0
+    obstacle_row_memory_sec: 0.8
+    obstacle_row_track_match_m: 1.25
+    obstacle_row_history_size: 7
+    # Expected spacing of the two drum rows; of several opposite-side pairs the closest to it is
+    # taken. 4.4 m as laid out on 2026-10-17 (at 6.0 the planner paired the first drum row with
+    # roadside posts 5.9 m on instead of the second row 4.2 m on).
+    obstacle_row_pair_nominal_gap_m: 4.4
+    # Nominal 4.0 m corridor where no map lane lines are given (midan, campus).
+    obstacle_route_half_width_m: 2.0
+    # Right steering authority is weaker; a right-side passage keeps this much more from the row.
+    obstacle_right_passage_margin_m: 0.3
+    # Past the zone end the zone cap ends once the bypass is finished: rear axle this far past
+    # the last row and the bypass path within this offset of the route (not the return point).
+    obstacle_release_past_row_m: 3.0
+    obstacle_release_offset_m: 0.5
+    # Route context age limit in the obstacle stage (elsewhere route_stale_sec 0.5); up to it
+    # the bypass continues instead of the input-loss rule.
+    obstacle_route_stale_sec: 1.0
+    # Objects with track_id 0 join the nearest kept object within this distance (map frame).
+    obstacle_association_m: 1.0
+    # An object counts once seen in this many perception frames (about 0.33 s at 30 Hz); an
+    # unconfirmed one not seen again for obstacle_unconfirmed_memory_sec is dropped. 10/23 Midan:
+    # ghosts of 1-8 frames were kept to the end and the car swerved around nothing; drums are
+    # seen in 400+ frames.
+    obstacle_confirm_frames: 10
+    obstacle_unconfirmed_memory_sec: 0.8
+    # A box whose bottom is above this height over base_footprint is over the road (sign, branch),
+    # not an obstacle. 10/23 Midan s 64: bottom 3.5 m, top 6.2 m; drums: bottom 0.1 m.
+    obstacle_max_bottom_height_m: 2.0
+    # A box whose top is below this height is a road surface return (10/23 Midan: top -0.02 to
+    # -0.08 m after the drums); drums are 0.8 m tall.
+    obstacle_min_top_height_m: 0.2
+    # Decision's TTC check only warns; motion_control and the driver own braking.
     aeb_stale_objects_sec: 0.25
     aeb_obstacle_path_half_width_m: 1.35
     aeb_warning_ttc_sec: 2.0
@@ -74,6 +193,52 @@ kaiev26_main_planning_engine:
     aeb_bypass_brake_ttc_sec: 0.25
     aeb_bypass_emergency_distance_m: 0.6
     aeb_release_clear_ticks: 8
+
+kaiev26_signal_phase_tracker:
+  ros__parameters:
+    use_sim_time: true
+    # Map-wide signal phase estimate. The planning engine drives on an aligned estimate of an
+    # event's own light; the camera rejects it (signal_schedule.py).
+    publish_rate_hz: 10.0
+    phases_topic: /planning/traffic_signal_phases
+    marker_topic: /planning/traffic_signal_phases/markers
+    evidence_topic: /planning/traffic_signal_phases/evidence
+    evidence_publish_period_sec: 1.0
+    # Empty uses the kaiev26_maps share maps/kcity/kcity_course_semantics.yaml.
+    map_semantics_path: ""
+    map_frame_id: map
+    # Observations are matched to map lights by track_id (the map id pv26 assigns).
+    alignment_bin_sec: 0.1
+    credible_mass: 0.9
+    aligned_interval_sec: 2.0
+    # Frames of one light within this time count as one observation in total.
+    observation_correlation_sec: 0.5
+    # Only the round lamps align the estimate; arrow readings are no evidence (a red-only head
+    # read as red and arrow pulled it onto the arrow phase). The arrow comes from the program.
+    circle_error_probability: 0.04
+    # Old evidence fades toward flat over the time the controller is in view.
+    forgetting_time_constant_sec: 180.0
+    max_log_odds: 40.0
+    # program, controller (map controller_id shares one alignment), or all.
+    coupling: controller
+    edge_stable_sec: 1.0
+    edge_max_gap_sec: 0.5
+    duration_max_gap_sec: 2.0
+    # Warn when a measured phase or period differs from the map program by more than this.
+    duration_warn_sec: 2.0
+    # Wall-clock prior: K-City cycles start on the UTC 100 s grid (2026-10-17: 29 camera edges
+    # within -0.83..+0.28 s of the map program). On the vehicle it turns on only after the node
+    # clock matches the GNSS RMC time within clock_check_max_offset_sec over clock_check_samples.
+    wallclock_prior_enabled: true
+    wallclock_prior_mean_sec: 0.0
+    wallclock_prior_std_sec: 0.5
+    gnss_status_topic: /gnss/status_verbose
+    clock_check_max_offset_sec: 0.5
+    clock_check_samples: 10
+    # Under use_sim_time (no GNSS check) the prior is off unless enabled here; Gazebo's cycle is
+    # sim time plus traffic_signal_cycle_offset_sec, so the mean is that offset (30 for "o30").
+    sim_prior_enabled: false
+    sim_prior_mean_sec: 0.0
 
 kaiev26_debug_monitor:
   ros__parameters:

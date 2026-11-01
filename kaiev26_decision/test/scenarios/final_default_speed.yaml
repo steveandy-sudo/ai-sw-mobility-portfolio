@@ -1,0 +1,27 @@
+# Final course at its default speed 10 m/s (D9): hold 10 m/s on the straight before the event,
+# then the red stop rules of signal_red_stop.yaml. Z2 starts 45 m out, past the Z1 line.
+name: ${ev.tag}_${brake.tag}
+description: final at 10 m/s drives 10 and still stops for red
+course: final
+speed_mps: 10
+event: ${ev.id}
+start: {distance_before_line_m: "${ev.start}", speed_mps: 10}
+vehicle: {brake_decel_mps2: "${brake.decel}"}
+duration_s: 16
+world:
+  other_lights: [{lamps: [green]}]
+  event_lights: [{lamps: [red]}]
+expect:
+  - {check: speed_reached, front_s_range: ["${ev.cruise_from}", "${ev.cruise_to}"], min_mps: 9.5}
+  - {check: stop_count, event: "${ev.id}", count: 1}
+  - {check: stop_position, event: "${ev.id}", front_gap_m: "${ev.${brake.window}}"}
+  - {check: no_red_crossing, event: "${ev.id}"}
+  - {check: brake_held, from: {stop: 1, event: "${ev.id}", plus_s: 0.5}, to: end}
+matrix:
+  ev:
+    - {tag: F1, id: Z1_SIGNAL_OBEY, start: 60, cruise_from: 65, cruise_to: 90, window_b39: [0, 3], window_b77: [0, null]}
+    - {tag: F2, id: Z2_SIGNAL_OBEY, start: 45, cruise_from: 134, cruise_to: 150, window_b39: [0, 3], window_b77: [0, null]}
+    - {tag: F5, id: Z5_SIGNAL_OBEY, start: 60, cruise_from: 416, cruise_to: 440, window_b39: [0, null], window_b77: [0, null]}
+  brake:
+    - {tag: b39, decel: 3.9, window: window_b39}
+    - {tag: b77, decel: 7.7, window: window_b77}

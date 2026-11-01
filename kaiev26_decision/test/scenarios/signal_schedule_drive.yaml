@@ -1,0 +1,41 @@
+# The signal decision drives on the aligned phase schedule; the camera only rejects it
+# (signal_schedule.py, owner 2026-10-17). Stopped at red, the schedule turns permitted 2 s later
+# with no change due for 30 s, while pv26 keeps reading red with the arrow off.
+# F4 (375): red stays lit through the arrow phase, so the red reading is only a missed arrow; the
+# car launches on the schedule after the 1 s change margin and the 0.4 s confirmation, as the
+# 10/17 bags would have (36 m from 375 the arrow read flickers).
+# F3 (305): the schedule shows green and arrow, so red is a sure opposite; the permission is
+# rejected within the margin and the car keeps holding.
+# The harness publishes the phase estimate in place of the tracker node.
+name: ${ev.tag}
+description: the schedule releases a missed arrow at 375 and a sure red rejects it at 305
+course: final
+speed_mps: 8
+event: ${ev.id}
+start: {distance_before_line_m: 45, speed_mps: 8}
+duration_s: 24
+world:
+  other_lights: [{lamps: [green]}]
+  event_lights:
+    - {lamps: [red]}
+  event_phases:
+    - {aligned: true, permitted: false, until_change_s: 30.0, lamps: [red]}
+    - {stopped_for_s: 2.0, aligned: true, permitted: true, until_change_s: 30.0, lamps: "${ev.permit_lamps}"}
+expect: "${ev.expect}"
+matrix:
+  ev:
+    - tag: F4_schedule_releases_missed_arrow
+      id: Z4_SIGNAL_OBEY
+      permit_lamps: [red, arrow]
+      expect:
+        - {check: stop_count, event: Z4_SIGNAL_OBEY, count: 1}
+        - {check: no_motion, from: {stop: 1, event: Z4_SIGNAL_OBEY}, to: {phase: event, step: 1, plus_s: 1.0}}
+        - {check: launch_after, after: {phase: event, step: 1}, min_delay_s: 1.0, max_delay_s: 3.0}
+        - {check: brake_count, event: Z4_SIGNAL_OBEY, from: {stop: 1, event: Z4_SIGNAL_OBEY, at: end}, count: 0}
+        - {check: passes_line, event: Z4_SIGNAL_OBEY}
+    - tag: F3_sure_red_rejects_schedule
+      id: Z3_SIGNAL_OBEY
+      permit_lamps: [green, arrow]
+      expect:
+        - {check: stop_count, event: Z3_SIGNAL_OBEY, count: 1}
+        - {check: no_motion, from: {stop: 1, event: Z3_SIGNAL_OBEY}}

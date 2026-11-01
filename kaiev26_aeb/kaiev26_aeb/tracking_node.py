@@ -1,4 +1,5 @@
 """Shared ROS adapter for Pure Pursuit and Stanley AEB tracking."""
+from functools import partial
 import json
 import time
 
@@ -16,7 +17,7 @@ from visualization_msgs.msg import Marker
 
 from .messages import predicted_path_marker, stamp_ns
 from .pursuit import Pursuit, PursuitConfig
-from .stanley import Stanley, StanleyConfig
+from .stanley import Stanley, StanleyConfig, motion_control_defaults
 
 
 class PursuitNode(Node):
@@ -85,6 +86,7 @@ class PursuitNode(Node):
             return res
         if req.data and not self.enabled:
             self.control.red.reset()
+            self.control.reset_lateral()
             self.red_gate = None
         self.enabled = req.data
         self.control.speed_command = 0.0
@@ -154,7 +156,9 @@ class PursuitNode(Node):
 
 class StanleyNode(PursuitNode):
     def __init__(self):
-        super().__init__('cone_stanley_node', Stanley, StanleyConfig)
+        # The steering values are the qualifying/final tracker's (motion_control.yaml).
+        super().__init__('cone_stanley_node', Stanley,
+                         partial(StanleyConfig, **motion_control_defaults()))
 
 
 def _run(args, node_class):

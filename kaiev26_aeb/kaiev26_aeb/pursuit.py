@@ -8,6 +8,15 @@ import math
 import numpy as np
 
 
+HOLD_COMMAND_REASONS = frozenset({
+    'short_path_or_no_forward_target',
+    'no_front_axle_reference',
+})
+# A cone path that drops out (one failed corridor frame) or arrives late holds the last command
+# for path_gap_hold_s instead of braking.
+PATH_GAP_REASONS = frozenset({'stale_path', 'empty_path'})
+
+
 @dataclass
 class PursuitConfig:
     target_speed_kph: float = 30.0
@@ -17,18 +26,36 @@ class PursuitConfig:
     lookahead_max_m: float = 7.0
     max_steering_rad: float = 0.4363
     steering_rate_radps: float = 1.0471975512
-    acceleration_mps2: float = 2.0
+    acceleration_mps2: float = 1.0
     path_timeout_s: float = 0.35
     state_timeout_s: float = 0.25
     red_front_offset_m: float = 1.98
     red_confirm_frames: int = 2
     red_gate_match_m: float = 1.0
+    red_brake_lead_m: float = 0.0
+    red_tracking_stop_speed_mps: float = 0.5
+    # False (TUI E-stop USE): a person stops the car with the E-stop at the red line. The red
+    # line is still detected and reported but changes neither speed nor steering, and no command
+    # engages the vehicle brake.
+    vehicle_brake: bool = True
+    # Longest cone-path gap (empty or older than path_timeout_s) that holds the last speed and
+    # steering without braking. Zero brakes on the first gap tick.
+    path_gap_hold_s: float = 0.5
 
     def validate(self):
-        if any(not math.isfinite(v) or v <= 0 for k, v in vars(self).items() if k != 'lookahead_gain_s'):
+        if any(not math.isfinite(v) or v <= 0 for k, v in vars(self).items()
+               if k not in ('lookahead_gain_s', 'red_brake_lead_m',
+                            'red_tracking_stop_speed_mps', 'vehicle_brake', 'path_gap_hold_s')):
             raise ValueError('Pursuit parameters must be finite and positive')
         if not math.isfinite(self.lookahead_gain_s) or self.lookahead_gain_s < 0:
             raise ValueError('lookahead_gain_s must be finite and nonnegative')
+        if not math.isfinite(self.red_brake_lead_m) or self.red_brake_lead_m < 0:
+            raise ValueError('red_brake_lead_m must be finite and nonnegative')
+        if not math.isfinite(self.path_gap_hold_s) or self.path_gap_hold_s < 0:
+            raise ValueError('path_gap_hold_s must be finite and nonnegative')
+        if (not math.isfinite(self.red_tracking_stop_speed_mps)
+                or self.red_tracking_stop_speed_mps < 0):
+            raise ValueError('red_tracking_stop_speed_mps must be finite and nonnegative')
         if self.lookahead_max_m < self.lookahead_base_m:
             raise ValueError('lookahead_max_m must be >= lookahead_base_m')
         if self.max_steering_rad >= math.pi / 2:
@@ -87,6 +114,7 @@ class RedStop:
         self.gate = None
         self.count = 0
         self.confirmed = self.latched = False
+        self.steering_frozen = False
         self.last_stamp = None
         self.distance = None
 
@@ -117,7 +145,8 @@ class RedStop:
             front = np.array([self.cfg.red_front_offset_m, 0.0])
             self.distance = float((self.gate[0] - front) @ normal)
             across = float((front - self.gate[0]) @ span / (span @ span))
-            if self.distance <= 0.0 and 0.0 <= across <= 1.0:
+            in_gate = (0.0 <= across <= 1.0 or self.cfg.red_brake_lead_m > 0.0)
+            if self.distance <= self.cfg.red_brake_lead_m and in_gate:
                 self.latched = True
 
     def status(self, speed):
@@ -125,6 +154,7 @@ class RedStop:
             'approaching' if self.confirmed else 'confirming' if self.count else 'waiting')
         return dict(red_state=state, red_latched=self.latched, red_confirm_count=self.count,
                     red_distance_m=self.distance,
+                    red_steering_frozen=self.steering_frozen,
                     red_gate_xy=self.gate.tolist() if self.gate is not None else [])
 
 
@@ -136,7 +166,22 @@ class Pursuit:
         self.cfg.validate()
         self.speed_command = 0.0
         self.steering_command = 0.0
+        self.tick_dt = 0.0
+        self.path_gap_s = 0.0
+        # Set when a stop zeroed the speed command: tracking resumes from the measured speed.
+        self.resume_from_measured = False
         self.red = RedStop(self.cfg)
+
+    def reset_lateral(self):
+        """Stanley clears its integral and compensation here; Pure Pursuit keeps no state."""
+
+    def motion_steering(self, steering):
+        """Measured steering that turns the car, for the path and gate motion compensation."""
+        return steering
+
+    def actuator_command(self, raw, steering, speed, dt):
+        """Command sent for the lateral solution; Stanley adds the steering compensation."""
+        return raw
 
     def lateral_solution(self, current, speed):
         """Only this calculation differs in the Stanley controller."""
@@ -149,15 +194,22 @@ class Pursuit:
         return dict(reason='tracking', lookahead_m=lookahead,
                     target_xy=target.tolist(), raw_steering_rad=raw)
 
-    def step(self, points, speed, steering, path_age, state_age, dt,
-             enabled=True, frame='base_link', estop=False, reverse=False,
-             red_gate=None, red_gate_stamp=None, red_gate_age=1e6):
+    def step(self, *args, **kwargs):
+        result = self._step(*args, **kwargs)
+        if not self.cfg.vehicle_brake:
+            result['brake_engage'] = False
+        return result
+
+    def _step(self, points, speed, steering, path_age, state_age, dt,
+              enabled=True, frame='base_link', estop=False, reverse=False,
+              red_gate=None, red_gate_stamp=None, red_gate_age=1e6):
         cfg = self.cfg
         reason = 'tracking'
         lateral = dict(lookahead_m=None, target_xy=None)
-        if self.red.latched:
-            reason = 'red_stop_latched'
-        elif not enabled:
+        self.tick_dt = min(dt, 0.1) if math.isfinite(dt) and dt > 0 else 0.0
+        turning = self.motion_steering(steering) if math.isfinite(steering) else steering
+        red_stop = False
+        if not enabled:
             reason = 'disabled'
         elif not all(math.isfinite(v) for v in (speed, steering, path_age, state_age, dt)):
             reason = 'invalid_state_or_time'
@@ -170,9 +222,13 @@ class Pursuit:
         elif state_age > cfg.state_timeout_s:
             reason = 'stale_state'
         else:
-            self.red.update(red_gate, red_gate_stamp, red_gate_age, speed, steering, dt)
+            if not self.red.latched:
+                self.red.update(red_gate, red_gate_stamp, red_gate_age, speed, turning, dt)
+            red_stop = self.red.latched and cfg.vehicle_brake
+            if red_stop and speed <= cfg.red_tracking_stop_speed_mps:
+                self.red.steering_frozen = True
             points = np.asarray(points, dtype=float)
-            if self.red.latched:
+            if red_stop and self.red.steering_frozen:
                 reason = 'red_stop_latched'
             elif path_age > cfg.path_timeout_s:
                 reason = 'stale_path'
@@ -183,24 +239,53 @@ class Pursuit:
             elif not np.isfinite(points).all() or np.any(np.diff(points[:, 0]) < 0):
                 reason = 'invalid_path'
             else:
-                current = advance_path(points, speed, steering, max(0.0, path_age), cfg.wheelbase_m)
+                current = advance_path(points, speed, turning, max(0.0, path_age), cfg.wheelbase_m)
                 lateral.update(self.lateral_solution(current, speed))
                 reason = lateral.pop('reason')
-        if reason != 'tracking':
+                if reason == 'tracking' and red_stop:
+                    reason = 'red_stop_tracking'
+        red_acting = self.red.latched and cfg.vehicle_brake
+        path_gap = (reason in PATH_GAP_REASONS and not red_acting and self.speed_command > 0.0
+                    and self.path_gap_s + self.tick_dt <= cfg.path_gap_hold_s + 1e-9)
+        if path_gap:
+            self.path_gap_s += self.tick_dt
+        elif reason in ('tracking', 'red_stop_tracking'):
+            self.path_gap_s = 0.0
+        if (reason in HOLD_COMMAND_REASONS and not red_acting) or path_gap:
+            return dict(reason=reason, controller=self.controller_name, tracking=False,
+                        command_held=True, speed_target_mps=self.speed_command,
+                        steering_target_rad=self.steering_command, brake_engage=False,
+                        path_gap_s=self.path_gap_s, **lateral, **self.red.status(speed))
+        if reason not in ('tracking', 'red_stop_tracking'):
             self.speed_command = 0.0
+            self.resume_from_measured = True
             # Hold the last limited angle while braking; do not snap the wheels straight.
-            return dict(reason=reason, controller=self.controller_name, tracking=False, speed_target_mps=0.0,
+            return dict(reason=reason, controller=self.controller_name, tracking=False,
+                        command_held=False, speed_target_mps=0.0,
                         steering_target_rad=self.steering_command, brake_engage=True,
                         **lateral, **self.red.status(speed))
         raw = lateral['raw_steering_rad']
-        desired = float(np.clip(raw, -cfg.max_steering_rad, cfg.max_steering_rad))
         # Bound a scheduling hiccup instead of catching up with a large command jump.
         dt = min(dt, 0.1)
+        command = self.actuator_command(raw, steering, speed, dt)
+        lateral['steering_compensation_rad'] = command - raw
+        desired = float(np.clip(command, -cfg.max_steering_rad, cfg.max_steering_rad))
         self.steering_command += float(np.clip(desired - self.steering_command,
                                                -cfg.steering_rate_radps * dt, cfg.steering_rate_radps * dt))
+        if reason == 'red_stop_tracking':
+            self.speed_command = 0.0
+            return dict(reason=reason, controller=self.controller_name, tracking=True,
+                        command_held=False, speed_target_mps=0.0,
+                        steering_target_rad=self.steering_command, brake_engage=True,
+                        **lateral, **self.red.status(speed))
+        if self.resume_from_measured:
+            # After a stop request the car may still be rolling: ramp on from its speed.
+            self.speed_command = max(self.speed_command, min(cfg.target_speed_kph / 3.6, max(0.0, speed)))
+            self.resume_from_measured = False
         self.speed_command = min(cfg.target_speed_kph / 3.6,
                                  self.speed_command + cfg.acceleration_mps2 * dt)
-        return dict(reason=reason, controller=self.controller_name, tracking=True, speed_target_mps=self.speed_command,
+        return dict(reason=reason, controller=self.controller_name, tracking=True,
+                    command_held=False, speed_target_mps=self.speed_command,
                     steering_target_rad=self.steering_command, brake_engage=False,
                     **lateral,
                     **self.red.status(speed))

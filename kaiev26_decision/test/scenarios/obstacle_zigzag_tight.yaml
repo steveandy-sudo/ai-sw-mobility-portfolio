@@ -1,0 +1,39 @@
+# Final mission 8 as laid out on 2026-10-17 (records/20261017_114251_*, rows measured from the
+# bag): two drum rows only 4.4 m apart on opposite halves of the lane, the first centred 1.2 m
+# left of the route at s 649.6, the second 0.9 m right of it at s 654.0. The planner takes the S
+# with the largest clearance inside the lane limits: each row passed on its open side (never one
+# swerve around both), within the steering limit; the speed follows that clearance.
+# Layout 2 is the mirror. "short" sees lane lines only 15 m ahead, as pv26 did on the car: the
+# far row then has no lane limits of its own (the planner used to plan nothing until 4.8 m before
+# the first row) and borrows the other row's.
+# Measured on 2026-10-19: layout 1 keeps 0.37 m from the nearest drum at 3.0 m/s (the planned S
+# keeps 0.50 m with the centre line allowance), layout 2 keeps 0.23 m capped near 2.3 m/s. Never
+# brakes for the drums. Both layouts measure the same with ideal and with short lane lines.
+name: tight_layout${layout.n}_${lanes.tag}
+description: obstacle zone two-row zigzag, rows 4.4 m apart
+course: final
+speed_mps: 10
+event: Z6_FINISH
+start: {route_s: 600.0, speed_mps: 5}
+vehicle: {brake_decel_mps2: 3.9}
+perception: {lane_max_x_m: "${lanes.max_x}"}
+duration_s: 70
+world:
+  other_lights: [{lamps: [green]}]
+  obstacle_rows: "${layout.rows}"
+expect:
+  - {check: min_obstacle_clearance, min_m: 0.1}
+  - {check: obstacle_pass_side}
+  - {check: lane_departure, s_range: [645, 675], left_max_m: 0.5, right_max_m: 0.0}
+  - {check: no_brake_while_moving, allow_events: [Z6_FINISH]}
+  - {check: route_offset, s_range: [695, 720], max_m: 0.5}
+  - {check: finish_hold, front_past_m: [0, null]}
+matrix:
+  lanes:
+    - {tag: ideal, max_x: 25.0}
+    - {tag: short, max_x: 15.0}
+  layout:
+    - n: 1
+      rows: [{route_s: 649.6, center_lateral_m: 1.2}, {route_s: 654.0, center_lateral_m: -0.9}]
+    - n: 2
+      rows: [{route_s: 649.6, center_lateral_m: -0.9}, {route_s: 654.0, center_lateral_m: 1.2}]

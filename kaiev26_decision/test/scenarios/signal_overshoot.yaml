@@ -1,0 +1,33 @@
+# A weak brake (the stack plans for 3.9 m/s²) makes the car stop with the rear axle past the line
+# while its own light, still ahead of the car, is red and every other light is green (D5): stay
+# until the own light shows "go" 5 s after the stop, then leave once without braking again.
+# The first check only confirms the situation: front bumper 2-6 m past the line. Z5 is left out:
+# its light hangs 2.2 m past the line, so a car with the rear axle past the line has it overhead.
+name: ${ev.tag}
+description: after an overshoot only the own light decides
+course: ${ev.course}
+speed_mps: 8
+event: ${ev.id}
+start: {distance_before_line_m: "${ev.start}", speed_mps: 8}
+vehicle: {brake_decel_mps2: "${ev.weak_brake}"}
+duration_s: 25
+world:
+  other_lights: [{lamps: [green]}]
+  event_lights:
+    - {lamps: [red]}
+    - {stopped_for_s: 5.0, lamps: "${ev.go}"}
+expect:
+  - {check: stop_position, event: "${ev.id}", front_gap_m: [-6.0, -2.0], label: overshoot_happened}
+  - {check: stop_count, event: "${ev.id}", count: 1}
+  - {check: no_motion, from: {stop: 1, event: "${ev.id}"}, to: {light: event, step: 1}}
+  - {check: brake_held, from: {stop: 1, event: "${ev.id}", plus_s: 0.5}, to: {light: event, step: 1}}
+  - {check: launch_after, after: {light: event, step: 1}, max_delay_s: 3.0}
+  - {check: brake_count, event: "${ev.id}", from: {light: event, step: 1}, count: 0}
+matrix:
+  ev:
+    - {tag: F1, course: final, start: 45, id: Z1_SIGNAL_OBEY, go: [green], weak_brake: 2.2}
+    - {tag: F2, course: final, start: 45, id: Z2_SIGNAL_OBEY, go: [green], weak_brake: 2.2}
+    - {tag: F3, course: final, start: 45, id: Z3_SIGNAL_OBEY, go: [red, arrow], weak_brake: 2.2}
+    - {tag: F4, course: final, start: 45, id: Z4_SIGNAL_OBEY, go: [red, arrow], weak_brake: 1.3}
+    - {tag: Q2, course: qualifying, start: 36, id: Z2_SIGNAL_OBEY, go: [green], weak_brake: 1.8}
+    - {tag: Q4, course: qualifying, start: 36, id: Z4_SIGNAL_OBEY, go: [green], weak_brake: 1.7}

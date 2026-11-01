@@ -1,0 +1,26 @@
+# Qualifying timed stops (D12): stop once before the line, stand at least 3 s, leave without
+# braking again for this event.
+name: ${ev.tag}_v${speed}_${brake.tag}
+description: timed stop stops and leaves after at least 3 s
+course: qualifying
+speed_mps: ${speed}
+event: ${ev.id}
+start: {distance_before_line_m: 45, speed_mps: "${speed}"}
+vehicle: {brake_decel_mps2: "${brake.decel}"}
+duration_s: 20
+world:
+  other_lights: [{lamps: [green]}]
+expect:
+  - {check: stop_count, event: "${ev.id}", count: 1}
+  - {check: stop_position, event: "${ev.id}", front_gap_m: [0, null]}
+  - {check: launch_after, after: {stop: 1, event: "${ev.id}"}, min_delay_s: 3.0, max_delay_s: 6.0}
+  - {check: brake_count, event: "${ev.id}", from: {stop: 1, event: "${ev.id}", at: end}, count: 0}
+  - {check: passes_line, event: "${ev.id}"}
+matrix:
+  ev:
+    - {tag: Q1, id: Z1_TIMED_STOP}
+    - {tag: Q3, id: Z3_TIMED_STOP}
+  speed: [7, 8]
+  brake:
+    - {tag: b39, decel: 3.9}
+    - {tag: b77, decel: 7.7}

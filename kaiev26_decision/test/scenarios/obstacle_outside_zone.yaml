@@ -1,0 +1,29 @@
+# Final course, one row of three touching drums outside the obstacle zone (route s 639.8-669.8 m,
+# D14), left of the route with its centre 1.9 m left, so the route stays open (inner drum edge
+# 1.15 m left of the route, body half width 0.59 m). after_zone: route s 690 m (after the zone end,
+# before the finish). before_zone: route s 620 m (before the zone start, in its pre-slow).
+# Expected (D14, D10): the obstacle behavior ignores objects outside the zone, so no bypass (the car
+# stays on the route), no contact, no 3 m/s zone cap at the row, no brake before the finish, finish
+# stop held and reported once.
+name: ${row.tag}
+description: drum row outside the obstacle zone is ignored
+course: final
+speed_mps: 10
+event: Z6_FINISH
+start: {route_s: 600.0, speed_mps: 5}
+vehicle: {brake_decel_mps2: 3.9}
+duration_s: 70
+world:
+  other_lights: [{lamps: [green]}]
+  obstacle_rows: [{route_s: "${row.route_s}", center_lateral_m: 1.9}]
+expect:
+  - {check: route_offset, s_range: "${row.s_range}", max_m: 0.3}
+  - {check: min_obstacle_clearance, min_m: 0.0}
+  - {check: speed_reached, front_s_range: "${row.s_range}", min_mps: 5.0}
+  - {check: no_brake_while_moving, allow_events: [Z6_FINISH]}
+  - {check: finish_hold, front_past_m: [0, null]}
+  - {check: finish_reported_once}
+matrix:
+  row:
+    - {tag: after_zone, route_s: 690.0, s_range: [680, 695]}
+    - {tag: before_zone, route_s: 620.0, s_range: [610, 625]}

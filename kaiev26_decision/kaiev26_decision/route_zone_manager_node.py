@@ -6,7 +6,7 @@ import math
 from pathlib import Path
 
 from geometry_msgs.msg import Point
-from kaiev26_msgs.msg import RouteContext
+from kaiev26_msgs.msg import RouteContext, VehicleState
 from nav_msgs.msg import Odometry
 import rclpy
 from rclpy.duration import Duration
@@ -22,6 +22,7 @@ from kaiev26_decision.zone_policy import ZonePolicy, load_zone_policy
 
 
 INF_DISTANCE = 1.0e6
+START_MODES = ("from_start", "resume")
 
 
 @dataclass(frozen=True)
@@ -102,6 +103,11 @@ def normalize_angle(angle: float) -> float:
     while angle < -math.pi:
         angle += 2.0 * math.pi
     return angle
+
+
+def odometry_speed(msg: Odometry) -> float:
+    twist = msg.twist.twist.linear
+    return math.hypot(float(twist.x), float(twist.y))
 
 
 def yaw_from_quaternion(q) -> float:
@@ -372,16 +378,92 @@ class PolylineRoute:
         return None
 
 
+# Keys a landmark may not carry when its geometry comes from the map semantics.
+MAP_GEOMETRY_KEYS = ("route_s", "waypoint", "x", "y", "width_m", "traffic_light_positions")
+
+
+@dataclass(frozen=True)
+class MapGeometry:
+    """Stop lines (polyline points) and traffic light head centres of a map semantics file."""
+
+    stop_lines: dict[str, tuple[tuple[float, float], ...]]
+    traffic_lights: dict[str, RouteMapPoint]
+
+
+def resolve_package_path(value: str) -> Path:
+    """'package://<package>/<relative path>' resolves in the package share, anything else is a path."""
+    if value.startswith("package://"):
+        from ament_index_python.packages import get_package_share_directory
+
+        package, _, relative = value[len("package://"):].partition("/")
+        return Path(get_package_share_directory(package)) / relative
+    return Path(value).expanduser()
+
+
+def load_map_geometry(path: Path) -> MapGeometry:
+    with path.open("r", encoding="utf-8") as stream:
+        data = yaml.safe_load(stream) or {}
+    stop_lines = {
+        str(item["id"]): tuple((float(p["x"]), float(p["y"])) for p in item["points"])
+        for item in data.get("stop_lines", [])
+    }
+    traffic_lights = {
+        str(item["id"]): RouteMapPoint(
+            x=float(item["pose"]["x"]),
+            y=float(item["pose"]["y"]),
+            z=float((item.get("bbox") or {}).get("center_z", item["pose"].get("z", 0.0))),
+        )
+        for item in data.get("traffic_lights", [])
+    }
+    return MapGeometry(stop_lines=stop_lines, traffic_lights=traffic_lights)
+
+
+def route_line_crossings(
+    route: PolylineRoute,
+    points: tuple[tuple[float, float], ...],
+    extension_m: float = 1.0,
+) -> list[float]:
+    """Route progress where the route crosses the line through the end points, extended at both ends."""
+    (ax, ay), (bx, by) = points[0], points[-1]
+    length = math.hypot(bx - ax, by - ay)
+    if length < 1.0e-6:
+        return []
+    ex, ey = (bx - ax) / length * extension_m, (by - ay) / length * extension_m
+    ax, ay, bx, by = ax - ex, ay - ey, bx + ex, by + ey
+    crossings = []
+    for index, (start, end) in enumerate(zip(route.waypoints, route.waypoints[1:])):
+        rx, ry = end.x - start.x, end.y - start.y
+        lx, ly = bx - ax, by - ay
+        denominator = rx * ly - ry * lx
+        if abs(denominator) < 1.0e-12:
+            continue
+        t = ((ax - start.x) * ly - (ay - start.y) * lx) / denominator
+        u = ((ax - start.x) * ry - (ay - start.y) * rx) / denominator
+        if 0.0 <= t <= 1.0 and 0.0 <= u <= 1.0:
+            crossings.append(route.cumulative_s[index] + t * math.hypot(rx, ry))
+    return sorted(crossings)
+
+
 def parse_route_stoplines(
     route: PolylineRoute,
     data: dict,
     max_snap_distance_m: float = 5.0,
+    map_geometry: MapGeometry | None = None,
 ) -> list[RouteStopline]:
+    """Route stop lines of a landmark config.
+
+    With map_geometry (the config names map_semantics) each landmark id is a stop line of the
+    map: route_s is where the route crosses the painted line (the first crossing after the
+    previous landmark, as the landmarks are listed in driving order), width_m the line length and
+    the traffic light positions the head centres of traffic_light_ids. Such landmarks may not
+    carry their own geometry. Without it, route_s, waypoint or x/y give the position.
+    """
     landmarks = data.get("landmarks", [])
     if not isinstance(landmarks, list):
         raise ValueError("landmark config landmarks must be a list")
 
     stoplines = []
+    previous_s = 0.0
     for index, item in enumerate(landmarks):
         if not isinstance(item, dict):
             raise ValueError(f"landmarks[{index}] must be a mapping")
@@ -391,6 +473,65 @@ def parse_route_stoplines(
             continue
 
         landmark_id = str(item.get("id", f"stopline_{index + 1:02d}"))
+        traffic_light_ids_value = item.get("traffic_light_ids", [])
+        if not isinstance(traffic_light_ids_value, list):
+            raise ValueError(
+                f"landmarks[{index}].traffic_light_ids must be a list"
+            )
+        traffic_light_ids = tuple(
+            str(value).strip() for value in traffic_light_ids_value if str(value).strip()
+        )
+        if map_geometry is not None:
+            copied = [key for key in MAP_GEOMETRY_KEYS if key in item]
+            if copied:
+                raise ValueError(
+                    f"landmarks[{index}] {landmark_id}: {', '.join(copied)} come from "
+                    "map_semantics and must not be repeated here"
+                )
+            line = map_geometry.stop_lines.get(landmark_id)
+            if line is None:
+                raise ValueError(
+                    f"landmarks[{index}] {landmark_id} is not a stop line of map_semantics"
+                )
+            crossings = [
+                value for value in route_line_crossings(route, line) if value >= previous_s
+            ]
+            if crossings:
+                progress_s = crossings[0]
+            else:
+                cx = sum(p[0] for p in line) / len(line)
+                cy = sum(p[1] for p in line) / len(line)
+                projection = route.project(cx, cy)
+                if projection.distance > max_snap_distance_m:
+                    raise ValueError(
+                        f"landmarks[{index}] {landmark_id} is {projection.distance:.2f} m "
+                        "from the route"
+                    )
+                progress_s = projection.progress_s
+            positions = []
+            for light_id in traffic_light_ids:
+                if light_id not in map_geometry.traffic_lights:
+                    raise ValueError(
+                        f"landmarks[{index}] {landmark_id}: traffic light {light_id} "
+                        "is not in map_semantics"
+                    )
+                positions.append(map_geometry.traffic_lights[light_id])
+            previous_s = progress_s
+            stoplines.append(
+                RouteStopline(
+                    landmark_id=landmark_id,
+                    progress_s=progress_s,
+                    width_m=max(
+                        0.5,
+                        math.hypot(line[-1][0] - line[0][0], line[-1][1] - line[0][1]),
+                    ),
+                    rule_id=str(item.get("rule_id", "")).strip(),
+                    traffic_light_ids=traffic_light_ids,
+                    traffic_light_positions=tuple(positions),
+                )
+            )
+            continue
+
         if "route_s" in item:
             progress_s = float(item["route_s"])
         elif "waypoint" in item:
@@ -418,11 +559,6 @@ def parse_route_stoplines(
                 f"landmarks[{index}] route_s {progress_s:.2f} is outside the route"
             )
 
-        traffic_light_ids_value = item.get("traffic_light_ids", [])
-        if not isinstance(traffic_light_ids_value, list):
-            raise ValueError(
-                f"landmarks[{index}].traffic_light_ids must be a list"
-            )
         traffic_light_positions_value = item.get("traffic_light_positions", [])
         if not isinstance(traffic_light_positions_value, list):
             raise ValueError(
@@ -452,17 +588,67 @@ def parse_route_stoplines(
                 progress_s=progress_s,
                 width_m=max(0.5, float(item.get("width_m", 4.0))),
                 rule_id=str(item.get("rule_id", "")).strip(),
-                traffic_light_ids=tuple(
-                    str(value).strip()
-                    for value in traffic_light_ids_value
-                    if str(value).strip()
-                ),
+                traffic_light_ids=traffic_light_ids,
                 traffic_light_positions=tuple(traffic_light_positions),
             )
         )
 
     stoplines.sort(key=lambda landmark: landmark.progress_s)
     return stoplines
+
+
+def load_landmark_stoplines(
+    route: PolylineRoute,
+    landmark_config: Path,
+    max_snap_distance_m: float = 5.0,
+) -> tuple[list[RouteStopline], Path | None]:
+    """Stop lines of a landmark file, with its map_semantics geometry if it names one."""
+    with Path(landmark_config).expanduser().open("r", encoding="utf-8") as stream:
+        data = yaml.safe_load(stream) or {}
+    semantics_path = None
+    map_geometry = None
+    if data.get("map_semantics"):
+        semantics_path = resolve_package_path(str(data["map_semantics"]))
+        map_geometry = load_map_geometry(semantics_path)
+    stoplines = parse_route_stoplines(
+        route, data, max_snap_distance_m=max_snap_distance_m, map_geometry=map_geometry
+    )
+    return stoplines, semantics_path
+
+
+def load_polyline_route(route_config_value: str) -> tuple[PolylineRoute, str]:
+    """Global route of a route YAML and its name."""
+    if not str(route_config_value).strip():
+        raise ValueError(
+            "route_config is required; select a course profile or provide a route YAML"
+        )
+    route_config = Path(route_config_value)
+    with route_config.open("r", encoding="utf-8") as stream:
+        data = yaml.safe_load(stream)
+    if not isinstance(data, dict):
+        raise ValueError(f"route config must be a mapping: {route_config}")
+    if "waypoints" not in data:
+        raise ValueError(
+            f"route config requires a waypoints list: {route_config}"
+        )
+    default_speed = float(data.get("default_speed_mps", 2.0))
+    waypoints = [
+        RouteWaypoint(
+            x=float(item["x"]),
+            y=float(item["y"]),
+            z=0.0,
+            speed_mps=float(item.get("speed_mps", default_speed)),
+            zone=str(item.get("zone", "NORMAL_ZONE")),
+        )
+        for item in data["waypoints"]
+    ]
+    zone_ranges = data.get("zone_ranges", [])
+    if not isinstance(zone_ranges, list):
+        raise ValueError("route zone_ranges must be a list")
+    return (
+        PolylineRoute(waypoints, zone_ranges=zone_ranges),
+        str(data.get("route_name", route_config.name)),
+    )
 
 
 def distance_to_next_stopline(
@@ -494,6 +680,8 @@ class RouteZoneManagerNode(Node):
         self.declare_parameter("base_frame_id", "base_footprint")
         self.declare_parameter("publish_rate_hz", 20.0)
         self.declare_parameter("lookahead_distance_m", 18.0)
+        # Provisional baseline, configurable for further recorded/field validation.
+        self.declare_parameter("obstacle_lookahead_distance_m", 45.0)
         self.declare_parameter("local_path_spacing_m", 1.0)
         self.declare_parameter("max_projection_distance_m", 5.0)
         self.declare_parameter("progress_search_window_m", 35.0)
@@ -501,15 +689,44 @@ class RouteZoneManagerNode(Node):
         self.declare_parameter("start_snap_heading_error_rad", 0.8)
         self.declare_parameter("start_snap_progress_m", 35.0)
         self.declare_parameter("initial_projection_max_heading_error_rad", 0.7)
+        # from_start: the run starts at the route start. Until the progress is committed the
+        # projection is searched only on the route from s = 0 by position, without the heading
+        # (2026-10-17 08:50-08:57: the heading read about 180 deg off at launch, the cold search
+        # matched the finish leg 5 m beside and the progress stayed there while standing).
+        # resume: heading-aware search over the whole route, for a start in the middle.
+        self.declare_parameter("start_mode", "resume")
         self.declare_parameter("initial_projection_heading_weight_m", 4.0)
-        self.declare_parameter("finish_zone_distance_m", 4.0)
+        # A projection near the last progress that points this far from the vehicle is the wrong
+        # leg of the route (2026-10-17: launched facing the finish leg, then U-turned onto the start
+        # leg 5 m away). It is dropped for a heading-aware search over the whole route, but only
+        # until the progress is committed and only while the vehicle moves (the two below).
+        self.declare_parameter("local_projection_max_heading_error_rad", 1.5707963267948966)
+        # Below this speed the heading does not judge a tracked projection. Near standstill the
+        # localization heading turns 180 deg and stays (2026-10-17 09:28, stopped at Q1 from 157.7 s
+        # to 162.5 s): the flipped heading sent the projection 72 m off and invalid, and the car
+        # never left the stop line.
+        self.declare_parameter("projection_heading_min_speed_mps", 1.0)
+        # Once the car drives in AUTO on a projection that points with it, the progress is
+        # committed: it stays in the search window and a heading against the route is only
+        # recorded (2026-10-17 17:16: a 0.2 s flip at 2.2 m/s just after the start moved the
+        # projection to the finish leg 5 m beside, s 727, and the mission completed at the start).
+        self.declare_parameter("vehicle_state_topic", "/vehicle/state")
+        self.declare_parameter("finish_zone_distance_m", 20.0)
         self.declare_parameter("intersection_zone_radius_m", 8.0)
         self.declare_parameter("landmark_snap_distance_m", 5.0)
         self.declare_parameter("stopline_passed_tolerance_m", 0.25)
+        # Vehicle pose whose stamp has not changed for this long is a frozen localization: the route
+        # context stops being published so every consumer sees it go stale (decision D2/D3). The stamp
+        # is compared with itself, not with this node's clock, so a clock offset cannot trigger it.
+        self.declare_parameter("pose_freeze_sec", 0.5)
 
         self.map_frame_id = str(self.get_parameter("map_frame_id").value)
         self.base_frame_id = str(self.get_parameter("base_frame_id").value)
         self.lookahead_distance_m = float(self.get_parameter("lookahead_distance_m").value)
+        self.obstacle_lookahead_distance_m = max(
+            self.lookahead_distance_m,
+            float(self.get_parameter("obstacle_lookahead_distance_m").value),
+        )
         self.local_path_spacing_m = max(0.2, float(self.get_parameter("local_path_spacing_m").value))
         self.max_projection_distance_m = max(1.0, float(self.get_parameter("max_projection_distance_m").value))
         self.progress_search_window_m = max(5.0, float(self.get_parameter("progress_search_window_m").value))
@@ -529,6 +746,19 @@ class RouteZoneManagerNode(Node):
             float(
                 self.get_parameter("initial_projection_heading_weight_m").value
             ),
+        )
+        self.start_mode = str(self.get_parameter("start_mode").value).strip().lower()
+        if self.start_mode not in START_MODES:
+            raise ValueError(
+                f"start_mode must be one of {', '.join(START_MODES)}, got [{self.start_mode}]"
+            )
+        self.local_projection_max_heading_error_rad = max(
+            0.0,
+            float(self.get_parameter("local_projection_max_heading_error_rad").value),
+        )
+        self.projection_heading_min_speed_mps = max(
+            0.0,
+            float(self.get_parameter("projection_heading_min_speed_mps").value),
         )
         self.finish_zone_distance_m = float(self.get_parameter("finish_zone_distance_m").value)
         self.intersection_zone_radius_m = float(self.get_parameter("intersection_zone_radius_m").value)
@@ -564,6 +794,11 @@ class RouteZoneManagerNode(Node):
 
         self.latest_odometry: Odometry | None = None
         self.last_progress_s: float | None = None
+        self.vehicle_auto = False
+        self.progress_committed = False
+        self.pose_freeze_sec = float(self.get_parameter("pose_freeze_sec").value)
+        self.last_pose_stamp_ns: int | None = None
+        self.last_pose_change_ns: int | None = None
         self.tf_buffer = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, self)
 
@@ -590,43 +825,21 @@ class RouteZoneManagerNode(Node):
             self.on_odometry,
             10,
         )
+        self.create_subscription(
+            VehicleState,
+            str(self.get_parameter("vehicle_state_topic").value),
+            self.on_vehicle_state,
+            1,
+        )
 
         publish_rate_hz = max(1.0, float(self.get_parameter("publish_rate_hz").value))
         self.create_timer(1.0 / publish_rate_hz, self.publish_route_context)
         self.publish_global_route_markers(self.get_clock().now().to_msg())
 
     def load_route(self, route_config_value: str) -> PolylineRoute:
-        if not route_config_value.strip():
-            raise ValueError(
-                "route_config is required; select a course profile or provide a route YAML"
-            )
-        route_config = Path(route_config_value)
-        with route_config.open("r", encoding="utf-8") as stream:
-            data = yaml.safe_load(stream)
-        if not isinstance(data, dict):
-            raise ValueError(f"route config must be a mapping: {route_config}")
-        if "waypoints" not in data:
-            raise ValueError(
-                f"route config requires a waypoints list: {route_config}"
-            )
-        default_speed = float(data.get("default_speed_mps", 2.0))
-        waypoints = [
-            RouteWaypoint(
-                x=float(item["x"]),
-                y=float(item["y"]),
-                z=0.0,
-                speed_mps=float(item.get("speed_mps", default_speed)),
-                zone=str(item.get("zone", "NORMAL_ZONE")),
-            )
-            for item in data["waypoints"]
-        ]
-        zone_ranges = data.get("zone_ranges", [])
-        if not isinstance(zone_ranges, list):
-            raise ValueError("route zone_ranges must be a list")
-        route = PolylineRoute(waypoints, zone_ranges=zone_ranges)
+        route, name = load_polyline_route(route_config_value)
         self.get_logger().info(
-            f"loaded global route [{data.get('route_name', route_config.name)}] "
-            f"with {len(waypoints)} waypoints"
+            f"loaded global route [{name}] with {len(route.waypoints)} waypoints"
         )
         return route
 
@@ -638,23 +851,22 @@ class RouteZoneManagerNode(Node):
         stoplines = []
         if landmark_config_value:
             landmark_config = Path(landmark_config_value).expanduser()
-            with landmark_config.open("r", encoding="utf-8") as stream:
-                data = yaml.safe_load(stream) or {}
-            stoplines.extend(
-                parse_route_stoplines(
-                    self.route,
-                    data,
-                    max_snap_distance_m=max(0.1, max_snap_distance_m),
-                )
+            loaded, semantics_path = load_landmark_stoplines(
+                self.route, landmark_config, max(0.1, max_snap_distance_m)
             )
+            stoplines.extend(loaded)
             self.get_logger().info(
                 f"loaded route landmarks from {landmark_config}"
+                + (f", geometry from {semantics_path}" if semantics_path else "")
             )
 
         return merge_route_stoplines(stoplines)
 
     def on_odometry(self, msg: Odometry) -> None:
         self.latest_odometry = msg
+
+    def on_vehicle_state(self, msg: VehicleState) -> None:
+        self.vehicle_auto = msg.mode == VehicleState.MODE_AUTO
 
     def next_route_stopline(self, progress_s: float) -> RouteStopline | None:
         for stopline in self.stoplines:
@@ -785,8 +997,16 @@ class RouteZoneManagerNode(Node):
             self.publish_invalid_route(now.to_msg(), "TF lookup failed")
             return
 
-        x, y, yaw = pose
-        projection = self.project_route(x, y, yaw)
+        x, y, yaw, pose_stamp_ns = pose
+        if self.pose_frozen(pose_stamp_ns, now.nanoseconds):
+            self.get_logger().warn(
+                f"vehicle pose stamp unchanged for over {self.pose_freeze_sec:g} s; "
+                "route context not published",
+                throttle_duration_sec=2.0,
+            )
+            return
+        speed_mps = odometry_speed(self.latest_odometry)
+        projection = self.project_route(x, y, yaw, speed_mps)
         distance_to_finish = max(0.0, self.route.total_length - projection.progress_s)
         distance_to_intersection = self.distance_to_next_zone(
             projection.progress_s, "INTERSECTION_ZONE"
@@ -827,24 +1047,41 @@ class RouteZoneManagerNode(Node):
         msg.distance_to_intersection = float(distance_to_intersection)
         msg.distance_to_finish = float(distance_to_finish)
         heading_error = normalize_angle(projection.yaw - yaw)
-        initial_heading_valid = (
-            self.last_progress_s is not None
-            or abs(heading_error) <= self.initial_projection_max_heading_error_rad
+        msg.route_projection_valid = self.projection_valid(
+            projection, heading_error, speed_mps
         )
-        msg.route_projection_valid = (
-            projection.distance <= self.max_projection_distance_m
-            and initial_heading_valid
-        )
+        if (
+            self.progress_committed
+            and abs(heading_error) > self.local_projection_max_heading_error_rad
+        ):
+            self.get_logger().warn(
+                f"heading {math.degrees(heading_error):+.0f} deg against the route at "
+                f"s={projection.progress_s:.1f} m ({speed_mps:.1f} m/s); progress kept",
+                throttle_duration_sec=2.0,
+            )
         msg.projection_confidence = float(
             max(0.0, min(1.0, 1.0 - projection.distance / self.max_projection_distance_m))
         )
         msg.cross_track_error = float(projection.cross_track_error)
         msg.heading_error = float(heading_error)
-        msg.local_path_points = self.local_path_points(projection.progress_s, x, y, yaw)
+        stage = self.policy_stage_at(projection.progress_s)
+        lookahead_distance_m = (
+            self.obstacle_lookahead_distance_m
+            if stage is not None and stage.obstacle_enabled
+            else self.lookahead_distance_m
+        )
+        msg.local_path_points = self.local_path_points(
+            projection.progress_s,
+            x,
+            y,
+            yaw,
+            lookahead_distance_m=lookahead_distance_m,
+        )
         self.publisher.publish(msg)
         self.publish_route_state_markers(now.to_msg(), projection)
         if msg.route_projection_valid:
             self.last_progress_s = float(projection.progress_s)
+            self.commit_progress(heading_error, speed_mps)
 
     def lookup_vehicle_pose(self) -> tuple[float, float, float] | None:
         try:
@@ -859,14 +1096,33 @@ class RouteZoneManagerNode(Node):
 
         translation = transform.transform.translation
         yaw = yaw_from_quaternion(transform.transform.rotation)
-        return float(translation.x), float(translation.y), yaw
+        stamp_ns = RosTime.from_msg(transform.header.stamp).nanoseconds
+        return float(translation.x), float(translation.y), yaw, stamp_ns
 
-    def pose_from_odometry_if_map(self) -> tuple[float, float, float] | None:
+    def pose_from_odometry_if_map(self) -> tuple[float, float, float, int] | None:
         if self.latest_odometry is None or self.latest_odometry.header.frame_id != self.map_frame_id:
             return None
         pose = self.latest_odometry.pose.pose
         yaw = yaw_from_quaternion(pose.orientation)
-        return float(pose.position.x), float(pose.position.y), yaw
+        stamp_ns = RosTime.from_msg(self.latest_odometry.header.stamp).nanoseconds
+        return float(pose.position.x), float(pose.position.y), yaw, stamp_ns
+
+    def pose_frozen(self, stamp_ns: int, now_ns: int) -> bool:
+        """True when the pose stamp has not advanced for longer than pose_freeze_sec.
+
+        A zero stamp carries no time information and is never treated as frozen.
+        """
+        if stamp_ns <= 0:
+            return False
+        if (
+            stamp_ns != self.last_pose_stamp_ns
+            or self.last_pose_change_ns is None
+            or now_ns < self.last_pose_change_ns
+        ):
+            self.last_pose_stamp_ns = stamp_ns
+            self.last_pose_change_ns = now_ns
+            return False
+        return (now_ns - self.last_pose_change_ns) * 1.0e-9 > self.pose_freeze_sec
 
     def publish_invalid_route(self, stamp, reason: str) -> None:
         msg = RouteContext()
@@ -884,7 +1140,62 @@ class RouteZoneManagerNode(Node):
         self.publisher.publish(msg)
         self.publish_route_state_markers(stamp, None)
 
-    def project_route(self, x: float, y: float, yaw: float) -> Projection:
+    def heading_judges_projection(self, speed_mps: float) -> bool:
+        """The heading may reject a tracked projection only before the progress is committed and
+        while the vehicle moves fast enough for the heading to be trusted."""
+        return (
+            not self.progress_committed
+            and speed_mps >= self.projection_heading_min_speed_mps
+        )
+
+    def projection_valid(
+        self,
+        projection: Projection,
+        heading_error: float,
+        speed_mps: float,
+    ) -> bool:
+        if projection.distance > self.max_projection_distance_m:
+            return False
+        if self.starting_from_route_start():
+            return True
+        if self.last_progress_s is None:
+            return abs(heading_error) <= self.initial_projection_max_heading_error_rad
+        if self.heading_judges_projection(speed_mps):
+            return abs(heading_error) <= self.local_projection_max_heading_error_rad
+        return True
+
+    def commit_progress(self, heading_error: float, speed_mps: float) -> None:
+        """Commit the tracked progress once the car drives in AUTO along the route."""
+        if (
+            self.progress_committed
+            or not self.vehicle_auto
+            or speed_mps < self.projection_heading_min_speed_mps
+            or abs(heading_error) > self.local_projection_max_heading_error_rad
+        ):
+            return
+        self.progress_committed = True
+        self.get_logger().info(
+            f"route progress committed at s={self.last_progress_s:.1f} m: from now on it "
+            "follows the search window and the heading is only recorded"
+        )
+
+    def starting_from_route_start(self) -> bool:
+        """from_start mode before the progress is committed."""
+        return (
+            getattr(self, "start_mode", "resume") == "from_start"
+            and not self.progress_committed
+        )
+
+    def project_route(self, x: float, y: float, yaw: float, speed_mps: float) -> Projection:
+        if self.starting_from_route_start():
+            # Position only, on the route from s = 0 up to the start range or one search
+            # window past the tracked progress; the finish leg is never in reach. The heading
+            # is left to the start check (route_readiness).
+            limit_s = self.start_snap_progress_m
+            if self.last_progress_s is not None:
+                limit_s = max(limit_s, self.last_progress_s + self.progress_search_window_m)
+            return self.route.project_prefix(x, y, limit_s)
+
         if self.last_progress_s is None and self.should_snap_to_route_start(x, y, yaw):
             return self.route.project_prefix(x, y, self.start_snap_progress_m)
 
@@ -895,7 +1206,11 @@ class RouteZoneManagerNode(Node):
                 self.last_progress_s,
                 self.progress_search_window_m,
             )
-            if local_projection.distance <= self.max_projection_distance_m:
+            if local_projection.distance <= self.max_projection_distance_m and (
+                not self.heading_judges_projection(speed_mps)
+                or abs(normalize_angle(local_projection.yaw - yaw))
+                <= self.local_projection_max_heading_error_rad
+            ):
                 return local_projection
 
         return self.route.project_with_heading(
@@ -1260,9 +1575,22 @@ class RouteZoneManagerNode(Node):
         )
         return [line, label]
 
-    def local_path_points(self, progress_s: float, ego_x: float, ego_y: float, ego_yaw: float) -> list[Point]:
+    def local_path_points(
+        self,
+        progress_s: float,
+        ego_x: float,
+        ego_y: float,
+        ego_yaw: float,
+        *,
+        lookahead_distance_m: float | None = None,
+    ) -> list[Point]:
         points: list[Point] = []
-        end_s = min(self.route.total_length, progress_s + self.lookahead_distance_m)
+        lookahead = (
+            self.lookahead_distance_m
+            if lookahead_distance_m is None
+            else max(1.0, lookahead_distance_m)
+        )
+        end_s = min(self.route.total_length, progress_s + lookahead)
         sample_s = progress_s
         cos_yaw = math.cos(ego_yaw)
         sin_yaw = math.sin(ego_yaw)

@@ -1,13 +1,8 @@
 from builtin_interfaces.msg import Time
-from geometry_msgs.msg import Point
-from kaiev26_msgs.msg import RouteContext, SceneSummary
 from nav_msgs.msg import Odometry
 import pytest
 from visualization_msgs.msg import Marker
 
-from kaiev26_decision.common import DecisionCommand
-from kaiev26_decision.planning_core import PlanningCore
-from kaiev26_decision.priority_selector import PrioritySelector
 from kaiev26_decision.route_zone_manager_node import (
     PolylineRoute,
     RouteMapPoint,
@@ -192,88 +187,6 @@ def test_landmark_override_preserves_matching_signal_position() -> None:
             traffic_light_positions=(signal_position,),
         )
     ]
-
-
-def test_intersection_zone_is_descriptive_and_uses_lane_follow() -> None:
-    scene = SceneSummary()
-    route = RouteContext()
-    route.route_projection_valid = True
-    route.current_zone = "INTERSECTION_ZONE"
-    route.local_path_points = [Point(x=0.0), Point(x=10.0)]
-
-    selector = PrioritySelector(stopline_approach_distance_m=18.0)
-
-    assert selector.choose(scene, route, None, False).behavior == "LANE_FOLLOW"
-
-
-def test_dashboard_only_zone_does_not_apply_intersection_speed_cap() -> None:
-    scene = SceneSummary()
-    route = RouteContext()
-    route.route_projection_valid = True
-    route.current_zone = "INTERSECTION_ZONE"
-    route.local_path_points = [Point(x=0.0), Point(x=10.0)]
-    decision = DecisionCommand(
-        active_behavior="GLOBAL_ROUTE_FOLLOW",
-        target_speed_limit_mps=4.0,
-        path_request="ROUTE_LOCAL_PATH",
-    )
-    core = PlanningCore(4.0, 0.8)
-    constraints = []
-
-    speed = core.resolve_speed_limit(decision, scene, route, constraints)
-
-    assert speed == 4.0
-    assert "INTERSECTION_ZONE_CAP" not in constraints
-
-
-def test_mapped_unknown_signal_requires_stop_near_stopline() -> None:
-    scene = SceneSummary()
-    scene.traffic_light_state = SceneSummary.TRAFFIC_UNKNOWN
-    scene.stopline_distance = 12.0
-    route = RouteContext()
-    route.route_projection_valid = True
-    route.next_stop_line_id = "stop_line_manual_052"
-    route.distance_to_stopline = 12.0
-
-    selector = PrioritySelector(stopline_approach_distance_m=18.0)
-
-    assert selector.choose(scene, route, None, False).behavior == "TRAFFIC_LIGHT"
-
-
-def test_arrow_only_releases_left_turn() -> None:
-    scene = SceneSummary()
-    scene.traffic_light_state = SceneSummary.TRAFFIC_ARROW
-    scene.stopline_distance = 8.0
-    route = RouteContext()
-    route.route_projection_valid = True
-    route.next_stop_line_id = "stop_line_manual_052"
-    route.distance_to_stopline = 8.0
-    selector = PrioritySelector(stopline_approach_distance_m=18.0)
-
-    route.next_maneuver = "RIGHT"
-    assert selector.choose(scene, route, None, False).behavior == "TRAFFIC_LIGHT"
-
-    route.next_maneuver = "LEFT"
-    assert selector.choose(scene, route, None, False).behavior == "LANE_FOLLOW"
-
-
-def test_hd_map_speed_limit_caps_planning_speed() -> None:
-    scene = SceneSummary()
-    route = RouteContext()
-    route.route_projection_valid = True
-    route.speed_limit_mps = 2.5
-    decision = DecisionCommand(
-        active_behavior="GLOBAL_ROUTE_FOLLOW",
-        target_speed_limit_mps=4.0,
-        path_request="ROUTE_LOCAL_PATH",
-    )
-    core = PlanningCore(4.0, 0.8)
-    constraints = []
-
-    speed = core.resolve_speed_limit(decision, scene, route, constraints)
-
-    assert speed == 2.5
-    assert "HD_MAP_SPEED_LIMIT" in constraints
 
 
 def test_global_route_markers_are_static_sparse_and_zone_aware() -> None:

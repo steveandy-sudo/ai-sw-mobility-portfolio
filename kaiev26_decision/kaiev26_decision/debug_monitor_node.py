@@ -397,7 +397,7 @@ class DebugMonitorNode(Node):
     def status_color(self, behavior: str, brake_active: bool, scene_health: str) -> tuple[float, float, float, float]:
         if brake_active or behavior == "EMERGENCY":
             return (1.0, 0.0, 0.0, 1.0)
-        if behavior in {"OBSTACLE", "TRAFFIC_LIGHT", "RECOVERY", "ROUTE_REJOIN"} or scene_health in {"STALE", "LOST"}:
+        if behavior in {"OBSTACLE", "TRAFFIC_LIGHT", "RECOVERY"} or scene_health in {"STALE", "LOST"}:
             return (1.0, 0.75, 0.0, 1.0)
         return (0.2, 1.0, 0.35, 1.0)
 

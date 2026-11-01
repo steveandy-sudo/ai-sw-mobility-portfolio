@@ -1,0 +1,27 @@
+# Finish (D11): stop after the finish line, hold the brake, report the finish once, never in RECOVERY.
+name: ${ev.tag}_v${speed}_${brake.tag}
+description: finish stops past the line and holds
+course: ${ev.course}
+speed_mps: ${speed}
+event: ${ev.id}
+start: {distance_before_line_m: 45, speed_mps: "${speed}"}
+vehicle: {brake_decel_mps2: "${brake.decel}"}
+duration_s: 18
+world:
+  other_lights: [{lamps: [green]}]
+expect:
+  - {check: stop_count, event: "${ev.id}", count: 1}
+  - {check: finish_hold, front_past_m: [0, null]}
+  - {check: brake_held, from: {stop: 1, event: "${ev.id}", plus_s: 0.5}, to: end}
+  - {check: finish_reported_once}
+  # 2026-10-20 Gazebo: the rear axle runs off the route end while the finish brake stops the car;
+  # that is the planned overrun, not an input loss.
+  - {check: behavior_absent, behavior: RECOVERY}
+matrix:
+  ev:
+    - {tag: final, course: final, id: Z6_FINISH}
+    - {tag: qualifying, course: qualifying, id: Z5_FINISH}
+  speed: [7, 8]
+  brake:
+    - {tag: b39, decel: 3.9}
+    - {tag: b77, decel: 7.7}

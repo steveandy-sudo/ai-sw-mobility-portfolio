@@ -1,0 +1,31 @@
+# Stopped at red, all four perception topics stop for 3 s (D2, D3): the brake stays on and the
+# car does not move; the light then shows "go" and the car leaves once.
+name: ${ev.tag}
+description: perception dropout during a red stop keeps the brake
+course: ${ev.course}
+speed_mps: 8
+event: ${ev.id}
+start: {distance_before_line_m: "${ev.start}", speed_mps: 8}
+duration_s: 22
+world:
+  other_lights: [{lamps: [green]}]
+  event_lights:
+    - {lamps: [red]}
+    - {stopped_for_s: 6.0, lamps: "${ev.go}"}
+  dropouts:
+    - {topics: [perception], start: {stopped_for_s: 1.0}, duration_s: 3.0}
+expect:
+  - {check: stop_count, event: "${ev.id}", count: 1}
+  - {check: brake_held, from: {stop: 1, event: "${ev.id}", plus_s: 0.5}, to: {light: event, step: 1}}
+  - {check: no_motion, from: {stop: 1, event: "${ev.id}"}, to: {light: event, step: 1}}
+  - {check: launch_after, after: {light: event, step: 1}, max_delay_s: 3.0}
+  - {check: brake_count, event: "${ev.id}", from: {light: event, step: 1}, count: 0}
+matrix:
+  ev:
+    - {tag: F1, course: final, start: 45, id: Z1_SIGNAL_OBEY, go: [green]}
+    - {tag: F2, course: final, start: 45, id: Z2_SIGNAL_OBEY, go: [green]}
+    - {tag: F3, course: final, start: 45, id: Z3_SIGNAL_OBEY, go: [red, arrow]}
+    - {tag: F4, course: final, start: 45, id: Z4_SIGNAL_OBEY, go: [red, arrow]}
+    - {tag: F5, course: final, start: 45, id: Z5_SIGNAL_OBEY, go: [green]}
+    - {tag: Q2, course: qualifying, start: 36, id: Z2_SIGNAL_OBEY, go: [green]}
+    - {tag: Q4, course: qualifying, start: 36, id: Z4_SIGNAL_OBEY, go: [green]}

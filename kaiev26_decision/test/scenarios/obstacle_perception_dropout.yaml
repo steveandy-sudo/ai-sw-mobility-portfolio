@@ -1,0 +1,38 @@
+# Final mission 8 drums as in obstacle_zigzag. All four perception topics stop for 4 s from route
+# s 650, after the two-row bypass was chosen and before the car is beside row 1 (D3, D10).
+# Expected: the car keeps the committed bypass path through both rows at the zone cap, no contact,
+# each row passed on its open side, no brake, back on the route and the finish stop held. The cap
+# holds until the bypass is back on the route, then the course speed again (as obstacle_zigzag). Without
+# the committed path the car falls back to the fallback speed; at the earlier 1.0 m/s it passed s 665
+# only at about t 24.4 s.
+name: layout${layout.n}
+description: perception lost inside the obstacle zone keeps the committed bypass
+course: final
+speed_mps: 10
+event: Z6_FINISH
+start: {route_s: 600.0, speed_mps: 5}
+vehicle: {brake_decel_mps2: 3.9}
+duration_s: 70
+world:
+  other_lights: [{lamps: [green]}]
+  obstacle_rows: "${layout.rows}"
+  dropouts:
+    - {topics: [perception], start: {route_s_ge: 650.0}, duration_s: 4.0}
+expect:
+  - {check: min_obstacle_clearance, min_m: 0.0}
+  - {check: obstacle_pass_side}
+  - {check: lane_departure, s_range: [645, 675], left_max_m: 0.5, right_max_m: 0.0}
+  - {check: max_speed, front_s_range: [641, "${layout.cap_to}"], max_mps: 3.05}
+  - {check: speed_reached, front_s_range: [685, 705], min_mps: 5.0}
+  - {check: no_brake_while_moving, allow_events: [Z6_FINISH]}
+  - {check: reaches, route_s: 665.0, by_t: 22.5}
+  - {check: route_offset, s_range: [695, 720], max_m: 0.5}
+  - {check: finish_hold, front_past_m: [0, null]}
+matrix:
+  layout:
+    - n: 1
+      cap_to: 671.8
+      rows: [{route_s: 656.03, center_lateral_m: 1.315}, {route_s: 662.03, center_lateral_m: -1.135}]
+    - n: 2
+      cap_to: 671.8
+      rows: [{route_s: 656.03, center_lateral_m: -1.135}, {route_s: 662.03, center_lateral_m: 1.315}]

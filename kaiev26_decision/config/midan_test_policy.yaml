@@ -1,0 +1,22 @@
+schema_version: 1
+course_id: manual_route_obstacle_test
+ready: true
+# Obstacle zone of a captured (Midan) route, so the bypass runs the final's search (map lane
+# corridor, 1.0 s route-input tolerance). The corridor is fixed at the final lane beside the drums,
+# measured on the global route (map and 10/17 perception agree): white edge line 1.96 m right,
+# yellow centre line 2.14 m left. Camera lanes are not used. Lay the two drum rows on the route as
+# on 10/17: 3 drums each, 4.4 m apart, one row from d +0.4 to +2.05 m and the other from d -1.7 to
+# -0.05 m (reports 261022_장애물회피_배치_차선_통과점검토).
+# The zone runs from route s 21 m to the end with no speed cap (15 m/s, the launch maximum): the
+# car first follows the global route (GLOBAL_ROUTE_FOLLOW), so the switch into the obstacle zone is
+# seen, then the obstacle behavior slows it (3 m/s) once perception reports the drums ahead
+# (2026-10-23: 1 m started the run already in the zone). Drum positions are not configured.
+obstacle_zone:
+  start_route_s: 21.0
+  speed_cap_mps: 15.0
+  pre_slow_decel_mps2: 0.5
+  lane_offsets_m: {right: -1.96, left: 2.14}
+stages:
+  - id: MIDAN_TEST
+    traffic_light_enabled: false
+    obstacle_enabled: true

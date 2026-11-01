@@ -4,7 +4,9 @@ import {
   CameraFrame,
   EgoPose,
   Histories,
+  LaneLine,
   MonitorModel,
+  ObjectBox,
   Point2,
   RosObject,
   TimedValue,
@@ -36,6 +38,9 @@ export const TOPICS = {
   sysidOdometry: "/sysid/odometry",
   sysidGlobalMarkers: "/sysid/global_route_markers",
   trajectory: "/debug/decision_fox/trajectory",
+  roadSegments: "/perception/road_segments",
+  objects: "/perception/objects",
+  signalPhases: "/planning/traffic_signal_phases",
   leftImage: "/perception/camera/left/wide/image_raw/compressed",
   rightImage: "/perception/camera/right/wide/image_raw/compressed",
   leftSourceImage: "/perception/camera/left/source/image_raw/compressed",
@@ -53,6 +58,9 @@ export function initialModel(): MonitorModel {
     zonePaths: [],
     localPath: [],
     targetPath: [],
+    targetPathSource: "",
+    laneLines: [],
+    objects: [],
     trail: [],
     isReplay: false,
     didSeek: false,
@@ -240,6 +248,25 @@ function parseGlobalMarkers(message: unknown): {
   };
 }
 
+function parseLaneLines(message: unknown): LaneLine[] {
+  return arrayField(message, "segments")
+    .map((segment) => ({ type: numberField(segment, "type") ?? 0, points: points(asObject(segment)?.points) }))
+    .filter((line) => line.points.length > 1);
+}
+
+function parseObjects(message: unknown): ObjectBox[] {
+  const boxes: ObjectBox[] = [];
+  for (const item of arrayField(message, "objects")) {
+    const position = point(nested(item, "pose", "position"));
+    const length = numberField(nested(item, "size"), "x");
+    const width = numberField(nested(item, "size"), "y");
+    if (position != undefined && length != undefined && width != undefined) {
+      boxes.push({ ...position, yaw: quaternionYaw(nested(item, "pose", "orientation")), length, width });
+    }
+  }
+  return boxes;
+}
+
 function parsePath(message: unknown): Point2[] {
   return arrayField(message, "poses")
     .map((pose) => point(nested(pose, "pose", "position")))
@@ -277,6 +304,16 @@ export function handleMessage(model: MonitorModel, event: MessageEvent): void {
     case TOPICS.targetPath:
     case TOPICS.sysidTargetPath:
       model.targetPath = points(message.points);
+      model.targetPathSource = textField(message, "source");
+      break;
+    case TOPICS.roadSegments:
+      model.laneLines = parseLaneLines(message);
+      break;
+    case TOPICS.objects:
+      model.objects = parseObjects(message);
+      break;
+    case TOPICS.signalPhases:
+      model.signalPhases = message;
       break;
     case TOPICS.targetSpeed:
     case TOPICS.sysidTargetSpeed:
@@ -420,6 +457,8 @@ export function cloneForRender(model: MonitorModel): MonitorModel {
     zonePaths: model.zonePaths.map((zone) => ({ ...zone, points: [...zone.points] })),
     localPath: [...model.localPath],
     targetPath: [...model.targetPath],
+    laneLines: model.laneLines.map((line) => ({ ...line, points: [...line.points] })),
+    objects: [...model.objects],
     trail: [...model.trail],
     histories: {
       speedTarget: [...model.histories.speedTarget],

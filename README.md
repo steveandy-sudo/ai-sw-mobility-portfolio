@@ -1,99 +1,71 @@
-# Decision-Making and Vehicle Control — Team K.A.I.
+# Autonomous Driving: Decision-Making and Control
 
-**2026 Student AI·SW Mobility Competition · ROS 2 Humble**
+**2026 Student AI·SW Mobility Competition · Konkuk University Team K.A.I.**
 
-[한국어](README.ko.md) · [Project portfolio](https://steveandy-sudo.github.io/projects/ai-sw-mobility/) · [Code guide](#code-guide) · [Setup](docs/PORTFOLIO_SETUP.md)
+Team K.A.I. completed all required missions in both the preliminary and final rounds under the competition rules. The team received two awards in the Self-built Autonomous Vehicle category:
 
-Route-based driving decisions, path tracking, and cone-course braking for an autonomous competition vehicle. This repository connects the implementations to the tools used to inspect mission states, target paths, steering commands, and vehicle feedback.
+| Division | Team award |
+| --- | --- |
+| Autonomous Driving Implementation | **Grand Prize — Minister of Land, Infrastructure and Transport Award** |
+| Creative Technology | **Special Award** for the vehicle technical report |
 
-| Period | Role | Team | Environment |
-| --- | --- | --- | --- |
-| March 2026–ongoing | Junghun Hwang — Decision-making | 27 members; decision-making team of 5 | ROS 2 Humble · Gazebo · Foxglove |
-
-## Results and current status
-
-| Setting | Trial condition | Result |
+| Period | Team | My role |
 | --- | --- | --- |
-| Venue practice: preliminary course | Real vehicle, **10 m/s (36 km/h)** | Successful waypoint driving |
-| Venue practice: final course | Real vehicle, **10 m/s (36 km/h)** | Successful waypoint driving |
-| Venue practice: AEB command trial | **50 km/h**; competition requirement **30 km/h** | Stop command issued at the red cones; a brake hardware fault prevented a stop within the zone |
-| Earlier Gazebo development | Closed-loop AEB trials | Pipeline integration exercised in simulation |
-| Offline controller checks | [29 existing AEB tests passed](docs/VALIDATION.md) during repository preparation | Geometry, braking logic, trial profiles, and package layout checked |
+| March–October 2026 | 27 members; decision-making subteam of 5 | FSM design, tracking-control implementation, driving-log analysis, and vehicle operation |
 
-The latest real-vehicle tests took place on **September 19–20, 2026**, during the organizer's open-practice period at the competition venue. Waypoint driving and AEB stopping were exercised repeatedly. These are practice results, not official competition results; the 50 km/h figure applies to AEB trials.
+[Project portfolio](https://steveandy-sudo.github.io/projects/ai-sw-mobility/) · [Experiment record](docs/EXPERIMENTS.md) · [Setup](docs/PORTFOLIO_SETUP.md)
 
-During footage review, two of the four brakes were reported inoperative. The vehicle overran the stopping zone, so this is a demonstrated stop-command event, not a successful physical stop.
+## My work
 
-For AEB, the success criterion was to detect the red cones, brake at the start of the red-cone zone, and stop before its end. The [experiment record](docs/EXPERIMENTS.md) separates these reported outcomes from the next measurements: stopping distance, path error, steering response, and repeatability.
+- Designed FSM states and transition conditions with teammates for traffic lights, timed stops, obstacle avoidance, and mission completion.
+- Recorded GNSS route waypoints while driving and conducted trials using GNSS/IMU-based localization.
+- Analyzed perception outputs, FSM transitions, planned paths, and vehicle feedback in Foxglove. Reviewed timestamps and coordinate frames, then discussed corrections with teammates.
+- Operated the vehicle during Test Week experimental runs and obstacle-avoidance field tests. The avoidance tests covered approach deceleration, collision-free passage, route return, and acceleration afterward.
+- Presented a Pure Pursuit–Stanley hybrid strategy at a Hyundai Mobis-sponsored symposium, then wrote and revised the ROS 2 implementation. The presentation with Woojin Hwang received the Hyundai Mobis Technical Special Award, Autonomous Driving Division, in the name of Team K.A.I.
 
-## Venue-practice excerpts
+Both competition courses reached up to **11 m/s (39.6 km/h) during venue practice**. An initial comparison on matched Gazebo segments at **6 m/s** showed approximately **14% lower heading-error p95** and **10% lower steering-command total variation** with hybrid tracking than with Stanley alone. These figures describe the initial simulation comparison; the competition outcome is the mission completion and awards above.
 
-[![Final-course waypoint driving](https://steveandy-sudo.github.io/media/projects/ai-sw-mobility/03-final-course-waypoint-poster.jpg)](https://steveandy-sudo.github.io/projects/ai-sw-mobility/#evidence-and-current-result)
-
-**[Final-course waypoint GIF](https://steveandy-sudo.github.io/media/projects/ai-sw-mobility/03-final-course-waypoint.gif)** — 17 continuous seconds, at original speed; reported run speed 10 m/s (36 km/h).
-
-**[50 km/h AEB trial GIF](https://steveandy-sudo.github.io/media/projects/ai-sw-mobility/04-aeb-braking-trial.gif)** — nine continuous seconds covering approach, the red-cone event, and the stopping-zone overrun. The stop command was issued, but two of four brakes were reported inoperative. This is not a successful in-zone stop.
-
-Both excerpts are from September 20 venue practice. The [case study](https://steveandy-sudo.github.io/projects/ai-sw-mobility/#evidence-and-current-result) includes click-to-play GIFs and context. Speeds are participant-reported; raw telemetry is not overlaid.
-
-## Development focus
-
-- **Driving decisions:** route and zone context, mission-state handling, and target path/speed interfaces.
-- **Path tracking:** Stanley control, steering bounds and rate limits, and integration with vehicle-command handling.
-- **Cone-course AEB:** cone-boundary center paths, red-entry stop logic, and missing/stale-input handling.
-- **Integration and observation:** Gazebo development, repeated real-vehicle venue practice, and Foxglove inspection of recorded and live signals.
-
-## System architecture
-
-The main driving test workflow is:
+## Software structure
 
 ```mermaid
 flowchart LR
-    Inputs[Perception and localization] --> Decision[Route / zone context and mission FSMs]
-    Decision -->|Target path and speed| Motion[Motion control]
-    Feedback[Vehicle feedback] --> Motion
-    Motion -->|Raw command| TUI[Test interface gate]
-    TUI -->|Planning command| Governor[External Control command governor]
-    Governor --> Vehicle[Vehicle]
-    Vehicle --> Feedback
-    Decision --> Monitor[Foxglove monitor]
-    Feedback --> Monitor
+    Inputs[Perception, localization and vehicle state] --> Decision[Route context and mission behavior]
+    Decision --> Targets[Target path and speed]
+    Targets --> Tracking[Pure Pursuit–Stanley tracking]
+    Tracking --> Control[Command handling and vehicle control]
+    Decision --> Monitor[Foxglove]
+    Control --> Monitor
 ```
 
-In this workflow, the test interface receives `/decision/raw_command` and owns publication to `/planning/command`. The cone-course AEB package has a separate trial workflow. It provides camera–LiDAR fusion and camera-only perception, each paired with Pure Pursuit or Stanley tracking.
-
-### Design choices visible in the code
-
-| Choice | Implementation | Evaluation relevance |
-| --- | --- | --- |
-| Separate mission logic from tracking | Mission FSMs produce target path/speed; motion control produces steering and speed commands | State selection and tracking response can be inspected separately |
-| Bound steering magnitude and change | Controller outputs pass through angle and rate constraints | Geometric commands must be compared with actuator response |
-| Brake on unusable AEB inputs | Stale state/path, invalid geometry, or wrong path frame requests zero speed and braking | Input failures have explicit reasons in the output |
-| Confirm and retain the red entry gate | Repeated observations confirm a gate; motion compensation updates it; crossing latches braking | A later cone row cannot silently replace the confirmed stop gate |
-
-The braking branch retains the last limited steering command while requesting a stop. These are implementation properties; measured stopping distance and tracking accuracy require logged trials.
-
-## Code guide
-
-| Area | Start here |
+| Area | Code to read first |
 | --- | --- |
-| Route and mission decisions | [Route/zone manager](kaiev26_decision/kaiev26_decision/route_zone_manager_node.py) · [Planning engine](kaiev26_decision/kaiev26_decision/main_planning_engine_node.py) · [Mission FSMs](kaiev26_decision/kaiev26_decision/scenario_modules/) |
-| Path tracking | [Motion controller](kaiev26_motion_control/kaiev26_motion_control/motion_control_node.py) · [Configuration](kaiev26_motion_control/config/motion_control.yaml) |
-| Cone geometry | [Fusion geometry](kaiev26_aeb/kaiev26_aeb/core.py) · [Camera-only geometry](kaiev26_aeb/kaiev26_aeb/yolo_core.py) |
-| AEB tracking and stops | [Pure Pursuit / input checks / red stop](kaiev26_aeb/kaiev26_aeb/pursuit.py) · [Stanley](kaiev26_aeb/kaiev26_aeb/stanley.py) · [Trial profiles](kaiev26_aeb/kaiev26_aeb/trial_profiles.py) |
-| Trial operation and monitoring | [Decision test interface](kaiev26_decision/kaiev26_decision/test_tui.py) · [AEB test interface](kaiev26_aeb/kaiev26_aeb/trial_tui.py) · [Foxglove package](kaiev26_decision_fox/README.md) |
+| Route and mission decisions | [Planning engine](kaiev26_decision/kaiev26_decision/main_planning_engine_node.py), [stop-point FSM](kaiev26_decision/kaiev26_decision/stop_point.py), [arbiter](kaiev26_decision/kaiev26_decision/arbiter.py) |
+| Obstacle avoidance | [Behavior](kaiev26_decision/kaiev26_decision/obstacle_behavior.py), [sequence](kaiev26_decision/kaiev26_decision/obstacle_sequence.py), [world representation](kaiev26_decision/kaiev26_decision/obstacle_world.py) |
+| Route capture and alignment | [Route capture](kaiev26_decision/kaiev26_decision/route_capture.py), [route manager](kaiev26_decision/kaiev26_decision/route_zone_manager_node.py) |
+| Pure Pursuit–Stanley tracking | [Motion controller](kaiev26_motion_control/kaiev26_motion_control/motion_control_node.py), [configuration](kaiev26_motion_control/config/motion_control.yaml) |
+| Vehicle operation and recorded trials | [Operating TUI](kaiev26_decision/kaiev26_decision/operating_tui.py), [test TUI](kaiev26_decision/kaiev26_decision/test_tui.py), [readiness checks](kaiev26_decision/kaiev26_decision/test_readiness.py) |
+| Cone-course brake inspection | [AEB package](kaiev26_aeb/README.md), [Stanley controller](kaiev26_aeb/kaiev26_aeb/stanley.py), [trial settings](kaiev26_aeb/kaiev26_aeb/trial_profiles.py) |
+| Visualization | [Foxglove package](kaiev26_decision_fox/README.md) |
 
-## Recorded-run inspection
+The main decision workflow publishes a target path and speed for motion control. In the TUI workflow, motion control publishes `/decision/raw_command`; the TUI relays it to `/planning/command`, followed by the external Control command governor. The cone-course brake inspection uses its own workflow.
 
-[AEB cone and command replay (GIF)](https://steveandy-sudo.github.io/media/projects/ai-sw-mobility/05-aeb-foxglove-replay.gif) shows cone geometry, target speed, and brake-command plots in Foxglove. The screen recording retains the visible 2× replay setting. Target speed is not measured vehicle speed; this view is presented separately from the onboard trial excerpt.
+## E-stop-controlled departure
 
-<img src="docs/foxglove_replay/replay_mid.png" alt="Foxglove MCAP replay with route context, cameras, mission states, and target versus actual vehicle signals" width="900" />
+The collected `kgm` revision implements the departure behavior identified during source selection: the vehicle waits in **E-stop PAUSE**, the operator selects AUTO, and releasing PAUSE to **RUN** permits departure. The TUI records the PAUSE/RUN transitions; the external vehicle-control system handles the physical interlock.
 
-*Existing MCAP replay view: route context, camera input, state readiness, and target/actual signals in one monitor. This frame shows the interface in a waiting state; its instantaneous readouts are not a completed-run performance summary.*
+See [startup behavior](docs/STARTUP_BEHAVIOR.md) for the code locations and the change from `main`.
+
+## Driving records
+
+Recorded driving data became central to my debugging work. Following perception, decision state, and measured vehicle response together helped me locate problems and discuss corrections with teammates.
+
+[![Onboard view during final-course venue practice](https://steveandy-sudo.github.io/media/projects/ai-sw-mobility/03-final-course-waypoint-poster.jpg)](https://steveandy-sudo.github.io/projects/ai-sw-mobility/#real-vehicle-trials)
+
+*Final-course waypoint driving during venue practice. The portfolio includes the driving excerpts and Foxglove views.*
 
 ## Build and documentation
 
-Use Ubuntu 22.04 / ROS 2 Humble and the matching team workspace, including `kaiev26_msgs`, Control, Localization, perception, and the sensor/simulator dependencies for the selected workflow. Camera-based AEB requires external model weights. Place this repository at `~/KAI_ws/src/Decision`, then:
+Use the matching Ubuntu 22.04 / ROS 2 Humble team workspace. External packages provide the message definitions, perception, localization, vehicle control, and simulator integration.
 
 ```bash
 cd ~/KAI_ws
@@ -103,8 +75,8 @@ colcon build --symlink-install --packages-select \
 source install/setup.bash
 ```
 
-This is the intended ROS build workflow. Preparation checks were offline; the full ROS build and integrated vehicle run require the team environment.
+- [Setup and workspace dependencies](docs/PORTFOLIO_SETUP.md)
+- [Runbook](docs/DECISION_RUNBOOK.md), [architecture](docs/ARCHITECTURE.md), [mission scenarios](docs/MISSION_SCENARIOS.md), [tracking](docs/ROUTE_TRACKING.md), and [parameters](docs/PARAMETER_BOOK.md)
+- [Validation](docs/VALIDATION.md) and [source revision](docs/SOURCE_MAP.md)
 
-- **Run or inspect:** [Setup](docs/PORTFOLIO_SETUP.md) · [Runbook](docs/DECISION_RUNBOOK.md) · [Mission scenarios](docs/MISSION_SCENARIOS.md)
-- **Understand the design:** [Architecture](docs/ARCHITECTURE.md) · [Route tracking](docs/ROUTE_TRACKING.md) · [Parameters](docs/PARAMETER_BOOK.md)
-- **Trace the evidence:** [Experiments](docs/EXPERIMENTS.md) · [Validation](docs/VALIDATION.md) · [Source snapshot](docs/SOURCE_MAP.md)
+The source packages retain their existing authorship, metadata, and license notices.

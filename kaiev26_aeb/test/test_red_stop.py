@@ -8,8 +8,9 @@ from kaiev26_aeb.messages import output_messages, empty_result
 from kaiev26_aeb.pursuit import Pursuit, PursuitConfig
 
 
-def tick(control, gate=None, stamp=None, age=0., speed=0., steering=0., **kwargs):
-    return control.step(np.array([[0., 0.], [20., 0.]]), speed=speed, steering=steering,
+def tick(control, gate=None, stamp=None, age=0., speed=0., steering=0., points=None, **kwargs):
+    path = np.array([[0., 0.], [20., 0.]]) if points is None else np.asarray(points, dtype=float)
+    return control.step(path, speed=speed, steering=steering,
                         path_age=0., state_age=0., dt=.02, red_gate=gate,
                         red_gate_stamp=stamp, red_gate_age=age, **kwargs)
 
@@ -52,7 +53,7 @@ def test_confirmed_entry_survives_occlusion_and_ignores_later_red_rows():
     assert r['red_latched']
     for _ in range(20):
         r = c.step([], speed=8., steering=0., path_age=100., state_age=100., dt=.02)
-        assert r['reason'] == 'red_stop_latched' and r['brake_engage']
+        assert r['reason'] == 'stale_state' and r['brake_engage']
         assert r['speed_target_mps'] == 0
     assert tick(c, enabled=False)['red_latched']
     c.red.reset()
@@ -82,6 +83,53 @@ def test_gate_acquisition_age_is_compensated_before_entry_check():
     tick(c, gate, 1, age=.2, speed=8.)
     r = tick(c, gate, 2, age=.2, speed=8.)
     assert r['red_latched'] and r['red_distance_m'] == pytest.approx(3.2-1.6-1.98)
+
+
+def test_new_case_can_latch_five_meters_before_red_line():
+    c = Pursuit(PursuitConfig(red_brake_lead_m=5.0))
+    gate = [[6.8, 2.5], [6.8, -2.5]]
+    tick(c, gate, 1)
+    r = tick(c, gate, 2)
+    assert r['red_latched']
+    assert r['red_distance_m'] == pytest.approx(6.8 - 1.98)
+    assert r['speed_target_mps'] == 0.0 and r['brake_engage']
+    assert r['steering_target_rad'] == pytest.approx(0.0)
+    assert not tick(Pursuit(), gate, 1)['red_latched']
+
+
+def test_red_braking_tracks_centerline_until_half_meter_per_second_then_freezes():
+    c = Pursuit(PursuitConfig(red_brake_lead_m=5.0))
+    gate = [[6.8, 2.5], [6.8, -2.5]]
+    path = [[0., 0.8], [20., 0.8]]
+    tick(c, gate, 1, speed=3.0, points=path)
+    braking = tick(c, gate, 2, speed=3.0, points=path)
+
+    assert braking['reason'] == 'red_stop_tracking'
+    assert braking['tracking'] and braking['brake_engage']
+    assert braking['speed_target_mps'] == 0.0
+    assert braking['steering_target_rad'] > 0.0
+    assert not braking['red_steering_frozen']
+
+    stopped = tick(c, speed=0.5, points=[[0., -0.8], [20., -0.8]])
+    assert stopped['reason'] == 'red_stop_latched'
+    assert not stopped['tracking'] and stopped['brake_engage']
+    assert stopped['steering_target_rad'] == braking['steering_target_rad']
+    assert stopped['red_steering_frozen']
+
+    rebound = tick(c, speed=0.6, points=[[0., -0.8], [20., -0.8]])
+    assert rebound['reason'] == 'red_stop_latched'
+    assert rebound['steering_target_rad'] == braking['steering_target_rad']
+
+
+def test_red_braking_keeps_brake_engaged_when_centerline_is_lost():
+    c = Pursuit(PursuitConfig(red_brake_lead_m=5.0))
+    gate = [[6.8, 2.5], [6.8, -2.5]]
+    tick(c, gate, 1, speed=3.0)
+    tick(c, gate, 2, speed=3.0)
+    result = tick(c, speed=3.0, points=[])
+    assert result['reason'] == 'empty_path'
+    assert result['red_latched'] and result['brake_engage']
+    assert result['speed_target_mps'] == 0.0
 
 
 def test_geometry_to_ros_red_gate_and_explicit_empty_message():

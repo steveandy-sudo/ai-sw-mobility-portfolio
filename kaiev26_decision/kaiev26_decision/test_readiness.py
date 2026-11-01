@@ -20,7 +20,7 @@ from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import NavSatFix, NavSatStatus
-from std_msgs.msg import Bool
+from std_msgs.msg import Bool, Float32
 
 
 @dataclass
@@ -66,7 +66,11 @@ class RouteReadinessNode(Node):
         '/steering/status',
         '/brake/status',
         '/planning/route_context',
+        '/debug/route_context_age',
+        '/debug/vehicle_state_age',
     )
+    # Without a route no planner runs, so its input ages are skipped too.
+    ROUTE_INPUTS = ('/planning/route_context', '/debug/route_context_age', '/debug/vehicle_state_age')
     UNIQUE_PUBLISHER_TOPICS = (
         '/gnss/fix',
         '/gnss/fix_velocity',
@@ -90,12 +94,24 @@ class RouteReadinessNode(Node):
         self.declare_parameter('maximum_velocity_variance_m2ps2', 1.0)
         self.declare_parameter('heading_initialization_speed_mps', 0.5)
         self.declare_parameter('maximum_start_speed_mps', 0.2)
-        self.declare_parameter('maximum_cross_track_error_m', 2.0)
-        self.declare_parameter(
-            'maximum_heading_error_rad', math.radians(30.0)
-        )
         self.declare_parameter('maximum_start_progress_m', 35.0)
         self.declare_parameter('allow_midroute_start', False)
+        # Before AUTO the vehicle must sit on the route and point along it (2026-10-17: READY was
+        # given at 179.6 deg heading error and at 11.8 m cross-track).
+        self.declare_parameter('maximum_start_heading_error_deg', 45.0)
+        self.declare_parameter('maximum_start_cross_track_m', 3.0)
+        # The route context age the planner sees. 2026-10-23/24: about one launch in four the
+        # planner got every route context 0.25-0.85 s late from the start while the topic ran at
+        # 20 Hz (DDS delivery, not the tick), so it coasted at speed 0 on ROUTE_CONTEXT_STALE.
+        # Healthy launches stay under 0.05 s; relaunching Decision clears it.
+        self.declare_parameter('maximum_start_route_context_age_sec', 0.15)
+        # The same for the vehicle state the planner sees. 2026-10-25 09:36: one launch got every
+        # /vehicle/state 0.14-0.64 s late from the start while route_readiness got it on time.
+        # The planner skips its stale check in MANUAL, so READY was given and the first AUTO tick
+        # went INPUT_LOSS_BRAKE on VEHICLE_STATE_STALE (limit 0.25 s). Healthy launches stay
+        # under 0.05 s.
+        self.declare_parameter('maximum_start_vehicle_state_age_sec', 0.15)
+        self.declare_parameter('require_route', True)
 
         self.freshness_timeout_ns = int(
             1.0e9 * float(self.get_parameter('freshness_timeout_sec').value)
@@ -115,20 +131,28 @@ class RouteReadinessNode(Node):
         self.maximum_start_speed_mps = float(
             self.get_parameter('maximum_start_speed_mps').value
         )
-        self.maximum_cross_track_error_m = float(
-            self.get_parameter('maximum_cross_track_error_m').value
-        )
-        self.maximum_heading_error_rad = float(
-            self.get_parameter('maximum_heading_error_rad').value
-        )
         self.maximum_start_progress_m = float(
             self.get_parameter('maximum_start_progress_m').value
         )
         self.allow_midroute_start = bool(
             self.get_parameter('allow_midroute_start').value
         )
+        self.maximum_start_heading_error_rad = math.radians(float(
+            self.get_parameter('maximum_start_heading_error_deg').value
+        ))
+        self.maximum_start_cross_track_m = float(
+            self.get_parameter('maximum_start_cross_track_m').value
+        )
+        self.maximum_start_route_context_age_sec = float(
+            self.get_parameter('maximum_start_route_context_age_sec').value
+        )
+        self.maximum_start_vehicle_state_age_sec = float(
+            self.get_parameter('maximum_start_vehicle_state_age_sec').value
+        )
 
-        self.inputs = {name: InputState() for name in self.INPUT_NAMES}
+        self.require_route = bool(self.get_parameter('require_route').value)
+        self.inputs = {name: InputState() for name in self.INPUT_NAMES
+                       if self.require_route or name not in self.ROUTE_INPUTS}
         self.reported_states: dict[str, bool] = {}
         self.latest_vehicle: VehicleState | None = None
         self.preflight_since_ns: int | None = None
@@ -184,6 +208,18 @@ class RouteReadinessNode(Node):
             RouteContext,
             '/planning/route_context',
             self.on_route,
+            qos_profile_sensor_data,
+        )
+        self.create_subscription(
+            Float32,
+            '/debug/route_context_age',
+            self.on_route_age,
+            qos_profile_sensor_data,
+        )
+        self.create_subscription(
+            Float32,
+            '/debug/vehicle_state_age',
+            self.on_vehicle_age,
             qos_profile_sensor_data,
         )
         self.create_timer(0.1, self.evaluate)
@@ -284,8 +320,6 @@ class RouteReadinessNode(Node):
         reasons = []
         if not math.isfinite(message.speed_mps):
             reasons.append(f'차량 속도값 오류: {message.speed_mps}')
-        if message.estop_active:
-            reasons.append('물리 E-Stop 활성: 해제 필요')
         if not self.preflight_passed:
             if message.mode != VehicleState.MODE_MANUAL:
                 reasons.append('출발 조건 확인 전 AUTO 전환됨: MANUAL로 복귀 필요')
@@ -295,7 +329,10 @@ class RouteReadinessNode(Node):
                     f'허용 |속도| <= {self.maximum_start_speed_mps:.2f} m/s'
                 )
         mode = 'AUTO' if message.mode == VehicleState.MODE_AUTO else 'MANUAL'
-        self.update_input('/vehicle/state', not reasons, '; '.join(reasons) or f'{mode}, 차량 상태 통과')
+        # 규정상 E-Stop PAUSE(AS-Emergency)로 출발을 기다리므로 출발을 막지 않는다.
+        estop = ', E-Stop PAUSE' if message.estop_active else ''
+        self.update_input(
+            '/vehicle/state', not reasons, '; '.join(reasons) or f'{mode}{estop}, 차량 상태 통과')
 
     def on_drive(self, message: DriveActuatorStatus) -> None:
         reasons = []
@@ -319,7 +356,8 @@ class RouteReadinessNode(Node):
         if message.can_timeout:
             reasons.append('조향 CAN 수신 시간 초과')
         if message.estop_active:
-            reasons.append('조향 E-Stop 활성')
+            # E-Stop은 KEYA를 disable만 한다. 통신과 피드백은 위에서 따로 본다.
+            warnings.append('E-Stop으로 조향 disable')
         if message.tracking_error_fault:
             warnings.append('조향 추종 오차 경고: 시험과 기록은 계속 진행')
         details = reasons + warnings
@@ -333,21 +371,29 @@ class RouteReadinessNode(Node):
         self.update_input('/brake/status', True, '브레이크 상태 수신')
 
     def on_route(self, message: RouteContext) -> None:
+        if not getattr(self, 'require_route', True):
+            return
         reasons = []
         if not message.route_projection_valid:
             reasons.append('차량 위치의 경로 투영 실패: 선택 경로와 차량 위치·방향 확인')
-        if not abs(float(message.cross_track_error)) <= self.maximum_cross_track_error_m:
-            reasons.append(
-                f'횡오차 {message.cross_track_error:+.2f} m; '
-                f'허용 |횡오차| <= {self.maximum_cross_track_error_m:.2f} m'
-            )
-        if not abs(float(message.heading_error)) <= self.maximum_heading_error_rad:
-            reasons.append(
-                f'헤딩 오차 {math.degrees(message.heading_error):+.1f}°; '
-                f'허용 |헤딩 오차| <= {math.degrees(self.maximum_heading_error_rad):.1f}°'
-            )
         if len(message.local_path_points) < 2:
             reasons.append(f'추종 경로점 부족: {len(message.local_path_points)}개, 최소 2개 필요')
+        if not self.preflight_passed and message.route_projection_valid:
+            heading_error = math.atan2(
+                math.sin(message.heading_error), math.cos(message.heading_error)
+            )
+            max_heading_rad = getattr(self, 'maximum_start_heading_error_rad', math.radians(45.0))
+            max_cross_track_m = getattr(self, 'maximum_start_cross_track_m', 3.0)
+            if not abs(heading_error) <= max_heading_rad:
+                reasons.append(
+                    f'출발 헤딩 오차 초과: {math.degrees(heading_error):+.1f}°, '
+                    f'허용 <= {math.degrees(max_heading_rad):.0f}°: 차량을 경로 진행 방향으로 정렬'
+                )
+            if not abs(message.cross_track_error) <= max_cross_track_m:
+                reasons.append(
+                    f'출발 횡오차 초과: {message.cross_track_error:+.2f} m, '
+                    f'허용 <= {max_cross_track_m:.1f} m: 차량을 경로 위에 정렬'
+                )
         if (
             not self.preflight_passed and not self.allow_midroute_start
             and not message.progress_s <= self.maximum_start_progress_m
@@ -365,6 +411,42 @@ class RouteReadinessNode(Node):
             ),
         )
 
+    def on_route_age(self, message: Float32) -> None:
+        if not getattr(self, 'require_route', True):
+            return
+        age = float(message.data)
+        maximum = getattr(self, 'maximum_start_route_context_age_sec', 0.15)
+        if age < 0.0:
+            valid, detail = False, '판단 노드가 경로 상황을 아직 받지 못함: route_zone_manager 확인'
+        elif self.preflight_passed:
+            valid, detail = True, f'판단 노드 경로 입력 나이 {age:.2f} s (출발 뒤 기록만)'
+        elif not age <= maximum:
+            valid, detail = False, (
+                f'판단 노드 경로 입력 지연: {age:.2f} s, 허용 <= {maximum:.2f} s; '
+                'DDS 전달 지연이면 계속되므로 Decision을 다시 실행'
+            )
+        else:
+            valid, detail = True, f'판단 노드 경로 입력 나이 {age:.2f} s'
+        self.update_input('/debug/route_context_age', valid, detail)
+
+    def on_vehicle_age(self, message: Float32) -> None:
+        if not getattr(self, 'require_route', True):
+            return
+        age = float(message.data)
+        maximum = getattr(self, 'maximum_start_vehicle_state_age_sec', 0.15)
+        if age < 0.0:
+            valid, detail = False, '판단 노드가 차량 상태를 아직 받지 못함: vehicle_state_publisher 확인'
+        elif self.preflight_passed:
+            valid, detail = True, f'판단 노드 차량 상태 입력 나이 {age:.2f} s (출발 뒤 기록만)'
+        elif not age <= maximum:
+            valid, detail = False, (
+                f'판단 노드 차량 상태 입력 지연: {age:.2f} s, 허용 <= {maximum:.2f} s; '
+                'DDS 전달 지연이면 계속되므로 Decision을 다시 실행'
+            )
+        else:
+            valid, detail = True, f'판단 노드 차량 상태 입력 나이 {age:.2f} s'
+        self.update_input('/debug/vehicle_state_age', valid, detail)
+
     def current_results(self, now_ns: int) -> dict[str, tuple[bool, str]]:
         results = {}
         for name, state in self.inputs.items():
@@ -381,6 +463,10 @@ class RouteReadinessNode(Node):
                 ),
             )
         for topic in self.UNIQUE_PUBLISHER_TOPICS:
+            if not getattr(self, 'require_route', True) and topic in (
+                '/planning/route_context', '/planning/target_path', '/planning/target_speed'
+            ):
+                continue
             publisher_count = self.count_publishers(topic)
             count_valid = publisher_count == 1
             count_detail = f'publishers={publisher_count}; 발행자 정확히 1개 필요'
@@ -476,8 +562,9 @@ class RouteReadinessNode(Node):
         self.ready_pub.publish(Bool(data=runtime_ready))
         self.publish_status(results, runtime_ready)
         if self.last_ready and not runtime_ready:
-            self.get_logger().error(
-                'ROUTE TRACKING : BLOCKED - a required input became unhealthy'
+            # Decision and the TUI only warn on this after the start; the car keeps driving.
+            self.get_logger().warn(
+                'ROUTE READINESS : WARNING - a required input became unhealthy, driving continues'
             )
         self.last_ready = runtime_ready
 

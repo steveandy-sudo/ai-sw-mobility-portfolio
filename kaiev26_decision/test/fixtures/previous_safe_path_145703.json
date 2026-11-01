@@ -1,0 +1,157 @@
+{
+  "source_bag": "20261017_145703_857137_decision_case_03_final_all_v10",
+  "note": "Reduced recorded path/odometry samples; not calibration or a safety-validated path.",
+  "saved_header": {
+    "sec": 1792217326,
+    "nanosec": 159588198,
+    "frame_id": "base_footprint"
+  },
+  "reused_header": {
+    "sec": 1792217326,
+    "nanosec": 735723383,
+    "frame_id": "base_footprint"
+  },
+  "points": [
+    [
+      1.2194238674378965e-14,
+      -2.220446049250313e-16,
+      0
+    ],
+    [
+      2.499851339042922,
+      -0.03134624918368889,
+      0
+    ],
+    [
+      10.000254950522843,
+      0.008389110521505927,
+      0
+    ],
+    [
+      20.001521804259458,
+      0.17610890499060372,
+      0
+    ],
+    [
+      34.99271884064056,
+      -1.2576062016698195,
+      0
+    ]
+  ],
+  "odometry": [
+    {
+      "header": {
+        "sec": 1792217326,
+        "nanosec": 130223270,
+        "frame_id": "map"
+      },
+      "child_frame_id": "base_footprint",
+      "position": [
+        -22.429342557843277,
+        -37.78117882302025,
+        -4e-323
+      ],
+      "quaternion": [
+        0,
+        0,
+        -0.8542126109653705,
+        0.5199238552593298
+      ]
+    },
+    {
+      "header": {
+        "sec": 1792217326,
+        "nanosec": 150224100,
+        "frame_id": "map"
+      },
+      "child_frame_id": "base_footprint",
+      "position": [
+        -22.479684866805663,
+        -37.879649989251874,
+        -4e-323
+      ],
+      "quaternion": [
+        0,
+        0,
+        -0.8545419191323995,
+        0.5193824298583035
+      ]
+    },
+    {
+      "header": {
+        "sec": 1792217326,
+        "nanosec": 170225530,
+        "frame_id": "map"
+      },
+      "child_frame_id": "base_footprint",
+      "position": [
+        -22.530107790443566,
+        -37.978005260876955,
+        -4e-323
+      ],
+      "quaternion": [
+        0,
+        0,
+        -0.8546819057827275,
+        0.5191520393175826
+      ]
+    },
+    {
+      "header": {
+        "sec": 1792217326,
+        "nanosec": 710230540,
+        "frame_id": "map"
+      },
+      "child_frame_id": "base_footprint",
+      "position": [
+        -23.83835677550008,
+        -40.54103493206131,
+        -4e-323
+      ],
+      "quaternion": [
+        0,
+        0,
+        -0.8577383171045764,
+        0.5140865485213644
+      ]
+    },
+    {
+      "header": {
+        "sec": 1792217326,
+        "nanosec": 730231301,
+        "frame_id": "map"
+      },
+      "child_frame_id": "base_footprint",
+      "position": [
+        -23.88419983040102,
+        -40.63348649223019,
+        -4e-323
+      ],
+      "quaternion": [
+        0,
+        0,
+        -0.8577780041330166,
+        0.5140203260821294
+      ]
+    },
+    {
+      "header": {
+        "sec": 1792217326,
+        "nanosec": 750220170,
+        "frame_id": "map"
+      },
+      "child_frame_id": "base_footprint",
+      "position": [
+        -23.93310143160339,
+        -40.72572243500872,
+        -4e-323
+      ],
+      "quaternion": [
+        0,
+        0,
+        -0.8579626378079791,
+        0.5137120906943642
+      ]
+    }
+  ]
+}

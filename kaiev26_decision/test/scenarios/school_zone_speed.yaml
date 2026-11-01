@@ -1,0 +1,35 @@
+# Qualifying school zone (1017 scenario, 30 km/h): from the front bumper at route s 331.5 to
+# the rear axle at 404.6 (front about 406.6) the speed stays at the 7.5 m/s (27 km/h) cap with
+# its overshoot below 30 km/h (8.33 m/s), whether the Q4 light lets the car pass or it stops
+# at red and launches again inside the zone. Faster course speeds are held to the cap; the
+# qualifying 7 m/s still reaches its target on the straight. The car starts at rest just past
+# the Q3 line (s 310.6), as it leaves the 3 s timed stop: on the course it cannot enter faster.
+name: ${ev.tag}_v${speed.v}
+description: school zone holds the 27 km/h cap with any course speed
+course: qualifying
+speed_mps: ${speed.v}
+event: Z4_SIGNAL_OBEY
+start: {route_s: 309.0, speed_mps: 0}
+duration_s: ${ev.duration}
+world:
+  other_lights: [{lamps: [green]}]
+  event_lights: "${ev.lights}"
+expect:
+  - {check: max_speed, front_s_range: [331.5, 406.6], max_mps: 8.0}
+  - {check: speed_reached, front_s_range: [365, 395], min_mps: "${speed.reach}"}
+  - {check: passes_line, event: Z4_SIGNAL_OBEY}
+  - {check: reaches, route_s: 410}
+matrix:
+  ev:
+    - {tag: green_pass, duration: 22, lights: [{lamps: [green]}]}
+    - tag: red_then_green
+      duration: 32
+      lights:
+        - {lamps: [red]}
+        - {front_gap_le: 10, lamps: [red]}
+        - {stopped_for_s: 2.0, lamps: [green]}
+        - {moving_for_s: 1.0, unseen: true}
+  speed:
+    - {v: 7, reach: 6.7}
+    - {v: 8, reach: 7.2}
+    - {v: 10, reach: 7.2}

@@ -1,0 +1,37 @@
+# Own light red on the whole approach: stop once before the line and keep the brake.
+# Stop window 0-3 m (front bumper) with the 3.9 m/s² brake the stopping model assumes. Z5 stops
+# 7.5 m before its line on purpose (overhead light, landmark brake_margin_m), so only "before the
+# line" is required there; the 7.7 m/s² day only requires "before the line" (window undecided).
+# Starts 45 m before the line (final) and 36 m (qualifying: Q1-Q2 and Q3-Q4 are only 41 m apart),
+# so the previous event's line is already behind; every other event's light is green.
+# F3 and Q4 allow 3.3 m: their brake_margin_m (F3 3.25 for light 305 visibility, Q4 3.20) is kept
+# on purpose (owner, 2026-10-16).
+name: ${ev.tag}_v${speed}_${brake.tag}
+description: red approach stops once before the line and holds
+course: ${ev.course}
+speed_mps: ${speed}
+event: ${ev.id}
+start: {distance_before_line_m: "${ev.start}", speed_mps: "${speed}"}
+vehicle: {brake_decel_mps2: "${brake.decel}"}
+duration_s: 15
+world:
+  other_lights: [{lamps: [green]}]
+  event_lights: [{lamps: [red]}]
+expect:
+  - {check: stop_count, event: "${ev.id}", count: 1}
+  - {check: stop_position, event: "${ev.id}", front_gap_m: "${ev.${brake.window}}"}
+  - {check: no_red_crossing, event: "${ev.id}"}
+  - {check: brake_held, from: {stop: 1, event: "${ev.id}", plus_s: 0.5}, to: end}
+matrix:
+  ev:
+    - {tag: F1, course: final, start: 45, id: Z1_SIGNAL_OBEY, window_b39: [0, 3], window_b77: [0, null]}
+    - {tag: F2, course: final, start: 45, id: Z2_SIGNAL_OBEY, window_b39: [0, 3], window_b77: [0, null]}
+    - {tag: F3, course: final, start: 45, id: Z3_SIGNAL_OBEY, window_b39: [0, 3.3], window_b77: [0, null]}
+    - {tag: F4, course: final, start: 45, id: Z4_SIGNAL_OBEY, window_b39: [0, 3], window_b77: [0, null]}
+    - {tag: F5, course: final, start: 45, id: Z5_SIGNAL_OBEY, window_b39: [0, null], window_b77: [0, null]}
+    - {tag: Q2, course: qualifying, start: 36, id: Z2_SIGNAL_OBEY, window_b39: [0, 3], window_b77: [0, null]}
+    - {tag: Q4, course: qualifying, start: 36, id: Z4_SIGNAL_OBEY, window_b39: [0, 3.3], window_b77: [0, null]}
+  speed: [7, 8]
+  brake:
+    - {tag: b39, decel: 3.9, window: window_b39}
+    - {tag: b77, decel: 7.7, window: window_b77}

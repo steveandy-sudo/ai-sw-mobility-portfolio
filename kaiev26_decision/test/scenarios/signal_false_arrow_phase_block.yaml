@@ -1,0 +1,29 @@
+# Stopped at red on the 예선 Q2 straight event, pv26 then reads a false green while the signal
+# phase tracker reports the own light aligned and not permitted: no launch while that lasts. When
+# the tracker says permitted (6 s later) the car goes after the usual confirmation (owner,
+# 2026-10-16). The false arrow on red at F3 and F4 is in signal_phase_withholds_release.yaml.
+# The harness publishes the tracker estimate (world.event_phases), so the tracker node is off.
+name: ${ev.tag}
+description: a go reading at a held stop is not used while an aligned phase estimate says not permitted
+course: ${ev.course}
+speed_mps: 8
+event: ${ev.id}
+start: {distance_before_line_m: "${ev.start}", speed_mps: 8}
+duration_s: 24
+world:
+  other_lights: [{lamps: [green]}]
+  event_lights:
+    - {lamps: [red]}
+    - {stopped_for_s: 2.0, lamps: "${ev.false_go}"}
+  event_phases:
+    - {aligned: true, permitted: false}
+    - {stopped_for_s: 8.0, aligned: true, permitted: true, until_change_s: 30.0}
+expect:
+  - {check: stop_count, event: "${ev.id}", count: 1}
+  - {check: brake_held, from: {stop: 1, event: "${ev.id}", plus_s: 0.5}, to: {phase: event, step: 1}}
+  - {check: launch_after, after: {phase: event, step: 1}, min_delay_s: 0.4, max_delay_s: 3.0}
+  - {check: brake_count, event: "${ev.id}", from: {stop: 1, event: "${ev.id}", at: end}, count: 0}
+  - {check: passes_line, event: "${ev.id}"}
+matrix:
+  ev:
+    - {tag: Q2, course: qualifying, start: 36, id: Z2_SIGNAL_OBEY, false_go: [green]}

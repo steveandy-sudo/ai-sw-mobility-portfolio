@@ -84,11 +84,30 @@ def decision_runs(records_root: Path) -> list[Path]:
     root = records_root.expanduser()
     if not root.is_dir():
         return []
-    return sorted(
+    return sorted((
         path
-        for path in root.glob("*_decision_case_*")
+        for path in root.glob("*_decision_case*")
         if path.is_dir() and completed_run(path)
-    )
+    ), key=lambda path: (run_start_time(path), path.name))
+
+
+def run_start_time(run: Path) -> datetime:
+    timezone = ZoneInfo('Asia/Seoul')
+    try:
+        scenario = yaml.safe_load((run / 'scenario.yaml').read_text(encoding='utf-8')) or {}
+        stamp = datetime.fromisoformat(scenario['started_at'])
+        return stamp.replace(tzinfo=timezone) if stamp.tzinfo is None else stamp.astimezone(timezone)
+    except (OSError, yaml.YAMLError, KeyError, TypeError, ValueError):
+        pass
+    parts = run.name.split('_', 2)
+    formats = {(8, 6): '%Y%m%d_%H%M%S', (6, 4): '%y%m%d_%H%M'}
+    pattern = formats.get(tuple(map(len, parts[:2])))
+    if pattern is not None:
+        try:
+            return datetime.strptime('_'.join(parts[:2]), pattern).replace(tzinfo=timezone)
+        except ValueError:
+            pass
+    return datetime.min.replace(tzinfo=timezone)
 
 
 def completed_run(run: Path) -> bool:
@@ -276,6 +295,11 @@ def copy_configuration_snapshot(run: Path, destination: Path) -> dict:
                 (decision_share / f"waypoints/{route_name}", "route.yaml"),
                 (motion_share / "config/motion_control.yaml", "motion_control.yaml"),
             ]
+        )
+        # the landmark file names its stop lines; their geometry is in the map semantics
+        maps_share = Path(get_package_share_directory("kaiev26_maps"))
+        candidates.append(
+            (maps_share / "maps/kcity/kcity_course_semantics.yaml", "map_semantics.yaml")
         )
     except (ImportError, LookupError):
         pass

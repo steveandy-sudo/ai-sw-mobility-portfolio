@@ -1,10 +1,7 @@
 import numpy as np
 import pytest
 
-from kaiev26_aeb.core import (Config, plan_corridor, ground_plane, cluster_cones,
-                              associate_camera, resolve_colors, project, fuse_and_plan)
-from kaiev26_aeb.messages import cloud_xyz
-from sensor_msgs.msg import PointCloud2, PointField
+from kaiev26_aeb.core import Config, plan_corridor
 
 
 def cone(x, y, color):
@@ -114,56 +111,3 @@ def test_outlier_and_invalid_corridor():
     assert plan_corridor(cones, Config())['valid']
     cones = [cone(x, y, color) for x in [3, 7, 13] for y, color in [(5, 'blue'), (-5, 'yellow')]]
     assert plan_corridor(cones, Config())['reason'] == 'invalid_width'
-
-
-def test_ground_cluster_and_tall_object_veto():
-    x, y = np.meshgrid(np.linspace(1, 22, 50), np.linspace(-5, 5, 40))
-    ground = np.column_stack((x.ravel(), y.ravel(), -.24 + .01*x.ravel()))
-    good = np.array([[6+dx, 2.5+dy, -.18+h] for dx, dy, h in [(-.05, 0, .16), (0, .03, .3), (.03, -.02, .55)]])
-    leg = good + [2, -5, 0]
-    body = np.array([[8, -2.5, 1.3], [8.05, -2.5, 1.4]])
-    xyz = np.vstack((ground, good, leg, body))
-    cfg = Config()
-    plane = ground_plane(xyz, cfg)
-    np.testing.assert_allclose(plane, [.01, 0, -.24], atol=.01)
-    cones = cluster_cones(xyz, plane, cfg)
-    assert len(cones) == 1
-    np.testing.assert_allclose(cones[0]['xyz'][:2], [6, 2.5], atol=.06)
-
-
-def test_association_uses_calibration_and_rejects_color_conflict():
-    xyz = np.array([[6, 2.5, .1], [6.03, 2.5, .3], [5.98, 2.51, .5]])
-    transform = np.eye(4)
-    transform[:3, :3] = [[0, -1, 0], [0, 0, -1], [1, 0, 0]]
-    transform[:3, 3] = [0, 1.2, 0]
-    info = {'k': [500, 0, 400, 0, 500, 300, 0, 0, 1], 'd': [0]*5,
-            'width': 800, 'height': 600, 'distortion_model': 'plumb_bob'}
-    uv, valid = project(xyz, transform, info)
-    assert valid.all()
-    bounds = [uv[:, 0].min()-5, uv[:, 1].min()-5, uv[:, 0].max()+5, uv[:, 1].max()+5]
-    cones = [{'indices': np.arange(3), 'matches': [], 'color': 'unknown', 'score': 0.0}]
-    associate_camera(cones, xyz, [{'xyxy': bounds, 'score': .95, 'color': 'blue'}], transform, info, 'left')
-    resolve_colors(cones)
-    assert cones[0]['color'] == 'blue'
-    associate_camera(cones, xyz, [{'xyxy': bounds, 'score': .95, 'color': 'red'}], transform, info, 'right')
-    resolve_colors(cones)
-    assert cones[0]['color'] == 'unknown'
-
-
-def test_pointcloud_organized_padding_and_big_endian():
-    msg = PointCloud2(height=2, width=2, point_step=16, row_step=40, is_bigendian=True)
-    msg.fields = [PointField(name=n, offset=i*4, datatype=7, count=1) for i, n in enumerate('xyz')]
-    buf = bytearray(80)
-    points = np.ndarray((2, 2, 4), dtype='>f4', buffer=buf, strides=(40, 16, 4))
-    points[:, :, :3] = np.arange(12).reshape(2, 2, 3)
-    msg.data = bytes(buf)
-    np.testing.assert_allclose(cloud_xyz(msg), np.arange(12).reshape(4, 3))
-
-
-def test_empty_lidar_clears_path_without_projection_crash():
-    info = {'k': [500, 0, 400, 0, 500, 300, 0, 0, 1], 'd': [0]*5,
-            'width': 800, 'height': 600, 'distortion_model': 'plumb_bob'}
-    cameras = {s: {'info': info, 'transform': np.eye(4), 'detections': []} for s in ['left', 'right']}
-    result = fuse_and_plan(np.empty((0, 3)), cameras, Config())
-    assert result['plan']['reason'] == 'ground_not_found'
-    assert not result['plan']['valid'] and not len(result['plan']['path'])

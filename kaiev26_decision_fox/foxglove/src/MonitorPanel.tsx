@@ -1,8 +1,10 @@
 import { PanelExtensionContext, Time } from "@foxglove/extension";
-import { PointerEvent, ReactElement, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { PointerEvent, ReactElement, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 
-import { FsmCard } from "./FsmCard";
+import { FsmCard, breakable } from "./FsmCard";
+import { LocalView } from "./LocalView";
+import { SignalClock } from "./SignalClock";
 import {
   TOPICS,
   arrayField,
@@ -26,19 +28,22 @@ import {
   TimedValue,
 } from "./types";
 
+// Panel redraw rate; Foxglove delivers frames faster (up to 60 Hz) during playback.
+const RENDER_HZ = 20;
+
+// Decision modules (D18): route follow, the stop-point machine per event kind, the obstacle
+// behavior and the input-loss rule. Behavior names are BehaviorDecision.active_behavior.
 const FSM = [
-  { key: "lane", name: "LaneFSM" },
-  { key: "traffic", name: "TrafficLightFSM" },
-  { key: "obstacle", name: "ObstacleFSM" },
-  { key: "recovery", name: "RecoveryFSM" },
-  { key: "static", name: "StaticStopFSM" },
-  { key: "finish", name: "FinishFSM" },
+  { key: "lane", name: "RouteFollow" },
+  { key: "traffic", name: "SignalStopPoint" },
+  { key: "obstacle", name: "ObstacleBehavior" },
+  { key: "recovery", name: "InputLoss" },
+  { key: "static", name: "TimedStopPoint" },
+  { key: "finish", name: "FinishStopPoint" },
 ] as const;
 
 const BEHAVIOR_FSM: Record<string, string> = {
-  LANE_FOLLOW: "lane",
   GLOBAL_ROUTE_FOLLOW: "lane",
-  ROUTE_REJOIN: "lane",
   TRAFFIC_LIGHT: "traffic",
   OBSTACLE: "obstacle",
   RECOVERY: "recovery",
@@ -47,34 +52,33 @@ const BEHAVIOR_FSM: Record<string, string> = {
 };
 
 const STATE_LABELS: Record<string, string> = {
-  LANE_GOOD: "인지 중심선 추종 중",
-  LANE_DEGRADED: "낮은 신뢰도의 중심선을 제한 추종 중",
-  LANE_LOST: "차선을 상실하여 이전 안전 경로 유지 중",
-  GLOBAL_ROUTE_FOLLOW: "전역 경로의 지역 구간을 추종 중",
-  ROUTE_REJOIN: "전역 경로로 복귀 중",
-  APPROACH: "대상 구간에 접근 중",
-  DECELERATE: "목표 지점까지 감속 중",
-  STOP_CONFIRM: "차량이 완전히 정지했는지 확인 중",
-  HOLD_3S: "정지선 앞에서 3초 정지 중",
-  STOP_HOLD: "정지선 앞 정지 유지 중",
-  WAIT_GREEN: "녹색 신호 확인 대기 중",
-  RELEASE: "정지 완료 후 재출발 중",
-  COMPLETE: "현재 Zone 이벤트 완료",
-  START: "정지 해제 후 출발 중",
-  PASSING: "교차로를 통과 중",
-  CLEAR: "주행 경로 전방 장애물 없음",
-  BYPASS_READY: "회피 경로에 진입 중",
-  BYPASS_HOLD: "장애물 옆 회피 경로 추종 중",
-  RETURN: "회피 후 전역 경로로 복귀 중",
-  BLOCKED_STOP: "안전 여유 부족으로 정지 중",
-  HOLD_PREVIOUS_PATH: "이전 안전 경로 유지 중",
-  DEGRADED_DRIVE: "제한 속도로 복구 주행 중",
-  STOP_SAFE: "안전 상태 확보를 위해 정지 중",
-  APPROACH_FINISH: "완주 지점에 접근 중",
-  SLOW_DOWN: "완주 지점 감속 중",
-  MISSION_COMPLETE: "주행 임무 완료",
-  MANUAL_CONTROL: "수동주행 모드로 자율 명령 정지",
-  STOP: "안전 조건에 따라 긴급 정지 중",
+  ROUTE_FOLLOW: "전역 경로의 지역 구간을 추종 중",
+  SIGNAL_APPROACH_GO: "신호 정지선 접근, 지금은 통과 허용",
+  SIGNAL_APPROACH_STOP: "신호 정지선 접근, 지금은 통과 불허",
+  SIGNAL_PRE_BRAKE: "제동 지점 앞에서 미리 감속 중",
+  SIGNAL_BRAKE: "신호 정지선에서 제동 중",
+  SIGNAL_WAIT: "신호 정지선에 서서 허용 대기",
+  SIGNAL_PASS: "통과 확정, 같은 신호로 다시 제동하지 않음",
+  TIMED_STOP_APPROACH: "정지 미션 정지선 접근",
+  TIMED_STOP_PRE_BRAKE: "제동 지점 앞에서 미리 감속 중",
+  TIMED_STOP_BRAKE: "정지 미션 정지선에서 제동 중",
+  TIMED_STOP_WAIT: "정지 시간 채우는 중",
+  TIMED_STOP_PASS: "정지 시간을 채우고 출발",
+  FINAL_SPRINT: "신호 없는 마지막 구간(F6) 고정 속도 주행",
+  FINISH_APPROACH: "결승선 앞 감속 중",
+  FINISH_BRAKE: "결승선에서 제동 중",
+  FINISH_STOPPED: "결승 정지 완료",
+  OBSTACLE_APPROACH: "장애물 구간 앞에서 속도를 낮추는 중",
+  OBSTACLE_LANE_KEEP: "장애물 구간 상한 속도로 차선 주행 중",
+  OBSTACLE_BYPASS: "확정한 회피 경로 추종 중",
+  OBSTACLE_BYPASS_FORCED: "여유가 모자란 강제 회피 경로 추종 중",
+  OBSTACLE_RETURN: "마지막 줄을 지나 경로로 복귀 중",
+  OBSTACLE_NO_PATH: "회피 경로가 없어 저속으로 이어 가는 중",
+  INPUT_LOSS_COAST: "입력 끊김, 브레이크 없이 속도 0",
+  INPUT_LOSS_HOLD_BRAKE: "입력 끊김, 걸려 있던 브레이크 유지",
+  INPUT_LOSS_BRAKE: "입력 끊김 1초 경과, 정지까지 제동",
+  ESTOP: "E-Stop 정지 요청",
+  MANUAL: "수동주행 모드로 자율 명령 정지",
 };
 
 const HEALTH_LABELS: Record<string, string> = {
@@ -114,7 +118,7 @@ function trafficStateLabel(state: number | undefined): string {
 }
 
 function holdTiming(behavior: RosObject | undefined): { elapsed: number; total: number } | undefined {
-  if (textField(behavior, "fsm_state") !== "HOLD_3S") {
+  if (textField(behavior, "active_behavior") !== "STATIC_STOP" || textField(behavior, "fsm_state") !== "TIMED_STOP_WAIT") {
     return undefined;
   }
   const match = /([0-9.]+)\/([0-9.]+)s/.exec(textField(behavior, "selected_reason"));
@@ -126,6 +130,11 @@ function holdTiming(behavior: RosObject | undefined): { elapsed: number; total: 
   return Number.isFinite(elapsed) && Number.isFinite(total) && total > 0
     ? { elapsed, total }
     : undefined;
+}
+
+// Decision publishes 1e6 m (INF_DISTANCE) when there is no stop line ahead.
+function finiteDistance(value: number | undefined): number | undefined {
+  return value == undefined || value >= 1e5 ? undefined : value;
 }
 
 function degrees(value: number | undefined): number | undefined {
@@ -145,18 +154,6 @@ function clockLabel(seconds: number | undefined): string {
   const date = new Date(seconds * 1000);
   const milliseconds = String(date.getMilliseconds()).padStart(3, "0");
   return `${date.toLocaleTimeString("ko-KR", { hour12: false })}.${milliseconds}`;
-}
-
-function routeLength(points: Point2[]): number {
-  let total = 0;
-  for (let index = 1; index < points.length; index += 1) {
-    const current = points[index];
-    const previous = points[index - 1];
-    if (current != undefined && previous != undefined) {
-      total += Math.hypot(current.x - previous.x, current.y - previous.y);
-    }
-  }
-  return total;
 }
 
 function baseToMap(points: Point2[], ego: EgoPose | undefined): Point2[] {
@@ -272,6 +269,7 @@ function diagnosticDetail(status: RosObject): string {
 }
 
 function HealthPanel({ model }: { model: MonitorModel }): ReactElement {
+  const isReplay = model.isReplay;
   const statuses = arrayField(model.readiness, "status")
     .map(asObject)
     .filter((item): item is RosObject => item != undefined);
@@ -317,7 +315,11 @@ function HealthPanel({ model }: { model: MonitorModel }): ReactElement {
           );
         })}
       </div>
-      <div className="health-foot">상태 원문은 각 항목에 마우스를 올려 확인</div>
+      <div className="health-foot">
+        <span>상태 원문은 각 항목에 마우스를 올려 확인</span>
+        <div className="health-stat"><span>ROS TIME</span><strong>{clockLabel(model.currentTime)}</strong></div>
+        <div className="health-stat"><span>DATA SOURCE</span><strong className={isReplay ? "replay-pill" : "live-pill"}>{isReplay ? "MCAP REPLAY" : "LIVE"}</strong></div>
+      </div>
     </section>
   );
 }
@@ -468,6 +470,34 @@ function TimePlot({
 function MonitorPanel({ context }: { context: PanelExtensionContext }): ReactElement {
   const modelRef = useRef<MonitorModel>(initialModel());
   const [model, setModel] = useState<MonitorModel>(() => cloneForRender(modelRef.current));
+  // Signal cycle offset from the UTC 100 s grid (panel setting; 10/17 K-City measured 0 s).
+  const [utcOffsetSec, setUtcOffsetSec] = useState<number>(() => {
+    const saved = (context.initialState as { utcOffsetSec?: unknown } | undefined)?.utcOffsetSec;
+    return typeof saved === "number" && Number.isFinite(saved) ? saved : 0;
+  });
+
+  useEffect(() => {
+    context.updatePanelSettingsEditor({
+      actionHandler: (action) => {
+        if (action.action !== "update" || action.payload.path[1] !== "utcOffsetSec") {
+          return;
+        }
+        const value = Number(action.payload.value);
+        if (Number.isFinite(value)) {
+          setUtcOffsetSec(value);
+          context.saveState({ utcOffsetSec: value });
+        }
+      },
+      nodes: {
+        signal: {
+          label: "신호 주기",
+          fields: {
+            utcOffsetSec: { label: "UTC 오프셋 (s)", input: "number", value: utcOffsetSec, step: 1 },
+          },
+        },
+      },
+    });
+  }, [context, utcOffsetSec]);
 
   useLayoutEffect(() => {
     const subscriptions = Object.values(TOPICS).map((topic) => ({ topic }));
@@ -478,6 +508,8 @@ function MonitorPanel({ context }: { context: PanelExtensionContext }): ReactEle
     context.watch("endTime");
     context.watch("didSeek");
     context.setDefaultPanelTitle("KAIEV26 Decision Monitor");
+    let lastRenderMs = 0;
+    let renderTimer: ReturnType<typeof setTimeout> | undefined;
     context.onRender = (renderState, done) => {
       const current = modelRef.current;
       current.didSeek = renderState.didSeek === true;
@@ -494,7 +526,24 @@ function MonitorPanel({ context }: { context: PanelExtensionContext }): ReactEle
       for (const event of renderState.currentFrame ?? []) {
         handleMessage(current, event);
       }
-      setModel(cloneForRender(current));
+      // Messages are applied every frame; the React tree redraws at most RENDER_HZ, with a
+      // trailing redraw so a paused or seeked view still shows the last frame.
+      const now = performance.now();
+      const wait = 1000 / RENDER_HZ - (now - lastRenderMs);
+      if (renderTimer != undefined) {
+        clearTimeout(renderTimer);
+        renderTimer = undefined;
+      }
+      if (wait <= 0 || renderState.didSeek === true) {
+        lastRenderMs = now;
+        setModel(cloneForRender(current));
+      } else {
+        renderTimer = setTimeout(() => {
+          renderTimer = undefined;
+          lastRenderMs = performance.now();
+          setModel(cloneForRender(modelRef.current));
+        }, wait);
+      }
       done();
     };
 
@@ -532,6 +581,9 @@ function MonitorPanel({ context }: { context: PanelExtensionContext }): ReactEle
         stop();
       }
       context.onRender = undefined;
+      if (renderTimer != undefined) {
+        clearTimeout(renderTimer);
+      }
     };
   }, [context]);
 
@@ -541,8 +593,8 @@ function MonitorPanel({ context }: { context: PanelExtensionContext }): ReactEle
   const activeFsm = BEHAVIOR_FSM[activeBehavior];
   const fsmState = textField(behavior, "fsm_state", "WAITING");
   const selectedReason = textField(behavior, "selected_reason", "판단 데이터 대기");
-  const stateDescription = fsmState === "HOLD_3S" ? selectedReason : STATE_LABELS[fsmState] ?? selectedReason;
   const hold = holdTiming(behavior);
+  const stateDescription = hold != undefined ? selectedReason : STATE_LABELS[fsmState] ?? selectedReason;
   const finalCommand = model.vehicleCommand ?? model.planningCommand ?? model.rawCommand;
   const targetSpeed = numberField(finalCommand, "speed_target_mps") ?? numberField(model.targetSpeed, "target_speed_mps");
   const actualSpeed = numberField(model.drive, "speed_mps") ?? numberField(model.vehicle, "speed_mps");
@@ -550,11 +602,7 @@ function MonitorPanel({ context }: { context: PanelExtensionContext }): ReactEle
   const actualSteer = degrees(numberField(model.steering, "actual_wheel_angle_rad") ?? numberField(model.vehicle, "steering_rad"));
   const currentZone = textField(route, "current_zone", "UNKNOWN_ZONE");
   const nextZone = textField(route, "next_zone", "--");
-  const progress = numberField(route, "progress_s");
-  const totalLength = useMemo(() => routeLength(model.globalPath), [model.globalPath]);
   const isReplay = model.isReplay;
-  const dataSource = isReplay ? "RECORDED RUN" : "LIVE ROS 2";
-  const scenario = textField(model.scenario, "data", dataSource);
   const projectionValid = boolField(route, "route_projection_valid");
   const trafficState = numberField(model.scene, "traffic_light_state");
   const obstacleOnPath = boolField(model.scene, "obstacle_on_path");
@@ -571,12 +619,6 @@ function MonitorPanel({ context }: { context: PanelExtensionContext }): ReactEle
     <div className="kai-fox">
       <style>{styles}</style>
       <main className="monitor-shell">
-        <header className="monitor-header">
-          <div className="brand"><strong>KAI DECISION MONITOR</strong><span title={scenario}>{scenario}</span></div>
-          <div className="header-stat"><span>ROS TIME</span><strong>{clockLabel(model.currentTime)}</strong></div>
-          <div className="header-stat"><span>ROUTE</span><strong>{fmt(progress, 1, "m")} / {fmt(totalLength > 0 ? totalLength : undefined, 1, "m")}</strong></div>
-          <div className="header-stat"><span>DATA SOURCE</span><strong className={isReplay ? "replay-pill" : "live-pill"}>{isReplay ? "MCAP REPLAY" : "LIVE"}</strong></div>
-        </header>
         <div className="monitor-grid">
           <div className="left-stack">
             <div className="map-grid">
@@ -585,10 +627,13 @@ function MonitorPanel({ context }: { context: PanelExtensionContext }): ReactEle
             </div>
             <section className="fsm-section">
               <div className="section-heading"><h2>행동 선택 · FSM</h2><span>활성 FSM은 현재 선택된 행동의 제어 상태를 표시</span></div>
-              <div className="fsm-grid">
-                {FSM.map((fsm, index) => (
-                  <FsmCard key={fsm.key} index={index + 1} name={fsm.name} active={activeFsm === fsm.key} state={fsmState} description={stateDescription} />
-                ))}
+              <div className="fsm-body">
+                <div className="fsm-grid">
+                  {FSM.map((fsm, index) => (
+                    <FsmCard key={fsm.key} index={index + 1} name={fsm.name} active={activeFsm === fsm.key} state={fsmState} description={stateDescription} />
+                  ))}
+                </div>
+                <LocalView model={model} />
               </div>
             </section>
           </div>
@@ -600,7 +645,7 @@ function MonitorPanel({ context }: { context: PanelExtensionContext }): ReactEle
             <section className="summary-panel">
               <div className="selected-state">
                 <span className="eyebrow">Selected behavior / FSM state</span>
-                <strong>{activeBehavior} · {fsmState}</strong>
+                <strong>{breakable(activeBehavior)} · {breakable(fsmState)}</strong>
                 <p>{stateDescription}</p>
                 {hold != undefined && (
                   <div className="hold-timer">
@@ -613,6 +658,7 @@ function MonitorPanel({ context }: { context: PanelExtensionContext }): ReactEle
                   <div><span>TUI / PLANNING</span><b title={commandLabel(model.planningCommand)}>{commandLabel(model.planningCommand)}</b></div>
                   <div><span>VEHICLE</span><b title={commandLabel(model.vehicleCommand)}>{commandLabel(model.vehicleCommand)}</b></div>
                 </div>
+                <SignalClock model={model} offsetSec={utcOffsetSec} />
               </div>
               <div className="motion-values">
                 <div className="motion-value target"><span>목표 속도</span><strong>{fmt(targetSpeed, 2, "m/s")}</strong></div>
@@ -627,13 +673,13 @@ function MonitorPanel({ context }: { context: PanelExtensionContext }): ReactEle
                   <div><span>CTE</span><strong>{fmt(numberField(route, "cross_track_error"), 2, "m")}</strong></div>
                   <div><span>HEADING ERROR</span><strong>{fmt(degrees(numberField(route, "heading_error")), 1, "deg")}</strong></div>
                   <div><span>TRAFFIC</span><strong>{trafficStateLabel(trafficState)}</strong></div>
-                  <div><span>STOP LINE</span><strong>{fmt(numberField(model.scene, "stopline_distance"), 1, "m")}</strong></div>
+                  <div><span>STOP LINE</span><strong>{fmt(finiteDistance(numberField(model.scene, "stopline_distance")), 1, "m")}</strong></div>
                   <div><span>OBSTACLE</span><strong className={obstacleOnPath === true ? "status-stop" : obstacleOnPath === false ? "status-good" : ""}>{obstacleOnPath == undefined ? "--" : obstacleOnPath ? fmt(obstacleDistance, 1, "m") : "CLEAR"}</strong></div>
                 </div>
               </div>
             </section>
-            <TimePlot title="속도 · TARGET / ACTUAL" unit="m/s" target={model.histories.speedTarget} actual={model.histories.speedActual} currentTime={model.currentTime} seek={seekPlayback} />
             <TimePlot title="조향각 · TARGET / ACTUAL" unit="deg" target={model.histories.steerTarget} actual={model.histories.steerActual} currentTime={model.currentTime} seek={seekPlayback} transform={(value) => (value * 180) / Math.PI} />
+            <TimePlot title="속도 · TARGET / ACTUAL" unit="m/s" target={model.histories.speedTarget} actual={model.histories.speedActual} currentTime={model.currentTime} seek={seekPlayback} />
           </div>
         </div>
       </main>

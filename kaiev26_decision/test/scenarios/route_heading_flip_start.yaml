@@ -1,0 +1,24 @@
+# The localization heading turns 180 deg near the start (2026-10-17). The finish leg runs 5 m
+# beside the start leg, so a heading-aware search over the whole route lands on its end (final
+# s 727.4, distance to finish 0) while the car still stands behind the first waypoint.
+# standstill: before AUTO, standing (the standstill flips turn at |v| <= 0.6 m/s).
+# launch: 0.2 s while pulling away at about 2 m/s in AUTO (17:16 at 38.9 s, 7 m behind the first
+# waypoint; the mission completed there). Either way the car drives on.
+name: ${course}_${flip.tag}
+description: heading flip near the start does not move the progress to the finish leg
+course: ${course}
+speed_mps: 8
+start: {route_s: -10.0, speed_mps: 0}
+warmup_s: 3.0
+duration_s: 15
+world:
+  other_lights: [{lamps: [green]}]
+  heading_flips:
+    - {start: "${flip.start}", duration_s: "${flip.duration_s}"}
+expect:
+  - {check: reaches, route_s: 30.0}
+matrix:
+  course: [final, qualifying]
+  flip:
+    - {tag: standstill, start: {at_s: -2.0}, duration_s: 1.5}
+    - {tag: launch, start: {moving_for_s: 1.7}, duration_s: 0.2}

@@ -1,0 +1,27 @@
+# Own light shows "go" on the whole approach: pass without stopping or braking, whether the
+# other events' lights (the next one is in view at Z1) are green or red (D5: own light only).
+name: ${ev.tag}_v${speed}_others_${others}
+description: green (or the arrow of a left-turn event) keeps going
+course: ${ev.course}
+speed_mps: ${speed}
+event: ${ev.id}
+start: {distance_before_line_m: "${ev.start}", speed_mps: "${speed}"}
+duration_s: 10
+world:
+  other_lights: [{lamps: ["${others}"]}]
+  event_lights: [{lamps: "${ev.go}"}]
+expect:
+  - {check: stop_count, event: "${ev.id}", count: 0}
+  - {check: brake_count, event: "${ev.id}", count: 0}
+  - {check: passes_line, event: "${ev.id}"}
+matrix:
+  ev:
+    - {tag: F1, course: final, start: 45, id: Z1_SIGNAL_OBEY, go: [green]}
+    - {tag: F2, course: final, start: 45, id: Z2_SIGNAL_OBEY, go: [green]}
+    - {tag: F3, course: final, start: 45, id: Z3_SIGNAL_OBEY, go: [red, arrow]}
+    - {tag: F4, course: final, start: 45, id: Z4_SIGNAL_OBEY, go: [red, arrow]}
+    - {tag: F5, course: final, start: 45, id: Z5_SIGNAL_OBEY, go: [green]}
+    - {tag: Q2, course: qualifying, start: 36, id: Z2_SIGNAL_OBEY, go: [green]}
+    - {tag: Q4, course: qualifying, start: 36, id: Z4_SIGNAL_OBEY, go: [green]}
+  speed: [7, 8]
+  others: [green, red]

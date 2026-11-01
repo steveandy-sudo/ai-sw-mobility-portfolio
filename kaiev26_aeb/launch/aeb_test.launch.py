@@ -9,14 +9,15 @@ from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
 
-from kaiev26_aeb.trial_profiles import default_model_path, profile_for
+from kaiev26_aeb.trial_profiles import (
+    TRIAL_ACCELERATION_MPS2, default_target_speed_kph, profile_for)
 
 
 def _build(context):
     try:
         profile = profile_for(int(LaunchConfiguration('scenario').perform(context)))
     except ValueError as error:
-        raise RuntimeError('scenario must be an integer from 1 to 4') from error
+        raise RuntimeError('scenario must be 1 or 2') from error
 
     share = get_package_share_directory('kaiev26_aeb')
     perception_config = os.path.join(share, 'config', 'perception.yaml')
@@ -24,39 +25,41 @@ def _build(context):
     use_sim_time = ParameterValue(
         LaunchConfiguration('use_sim_time'), value_type=bool)
 
-    perception_parameters = {
-        'use_sim_time': use_sim_time,
-        'model_path': ParameterValue(
-            LaunchConfiguration('model_path'), value_type=str),
-        'device': ParameterValue(LaunchConfiguration('device'), value_type=str),
-    }
-    if profile.perception == 'fusion':
-        perception_parameters.update({
-            'points_topic': ParameterValue(
-                LaunchConfiguration('points_topic'), value_type=str),
-            'cloud_time_offset_s': ParameterValue(
-                LaunchConfiguration('cloud_time_offset_s'), value_type=float),
-        })
+    perception_node = Node(
+        package='cone_perception', executable='cone_node',
+        name='cone_perception', output='screen',
+        parameters=[os.path.join(get_package_share_directory('cone_perception'),
+                                 'config', 'cone_perception.yaml'),
+                    {'use_sim_time': use_sim_time}],
+    )
 
     tracking_parameters = {
         'use_sim_time': use_sim_time,
         'enabled': ParameterValue(LaunchConfiguration('enabled'), value_type=bool),
         'command_topic': ParameterValue(
             LaunchConfiguration('command_topic'), value_type=str),
-        'target_speed_kph': ParameterValue(
-            LaunchConfiguration('target_speed_kph'), value_type=float),
+        'target_speed_kph': float(
+            LaunchConfiguration('target_speed_kph').perform(context)
+            or default_target_speed_kph(profile.scenario)),
+        'acceleration_mps2': TRIAL_ACCELERATION_MPS2,
+        'red_brake_lead_m': ParameterValue(
+            LaunchConfiguration('red_brake_lead_m'), value_type=float),
+        'vehicle_brake': ParameterValue(
+            LaunchConfiguration('vehicle_brake'), value_type=bool),
     }
 
-    return [
+    actions = [
+        perception_node,
         Node(
             package='kaiev26_aeb', executable=profile.perception_node,
-            name=profile.perception_node, output='screen',
-            parameters=[perception_config, perception_parameters]),
+            name=profile.perception_node, output='screen', parameters=[
+                perception_config, {'use_sim_time': use_sim_time}]),
         Node(
             package='kaiev26_aeb', executable=profile.controller_node,
             name=profile.controller_node, output='screen',
             parameters=[tracking_config, tracking_parameters]),
     ]
+    return actions
 
 
 def generate_launch_description():
@@ -65,11 +68,10 @@ def generate_launch_description():
         'use_sim_time': 'false',
         'enabled': 'false',
         'command_topic': '',
-        'target_speed_kph': '5.0',
-        'model_path': default_model_path(),
-        'device': 'auto',
-        'points_topic': '/ouster/points',
-        'cloud_time_offset_s': '0.025',
+        'target_speed_kph': '',
+        'red_brake_lead_m': '5.0',
+        # false: TUI E-stop USE, the controller never engages the vehicle brake.
+        'vehicle_brake': 'true',
     }
     return LaunchDescription([
         *[DeclareLaunchArgument(name, default_value=value)

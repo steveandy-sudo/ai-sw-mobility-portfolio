@@ -1,0 +1,30 @@
+# Driving at 8 m/s on a straight with no event near, one input stops for 3 s (D2): drive off at
+# once (speed 0, no brake), no brake in the first second, brake by 2 s after the dropout began and
+# kept until standstill even though the input returns, then drive again. 10 s keep clear of the
+# next event (an arrow event treats the scripted green as no permission).
+# Detection differs per input. vehicle_state: Decision and MC see the stale stamp after 0.25 s.
+# localization: the last TF stays in the buffer, so the route manager notices a frozen pose stamp
+# after pose_freeze_sec 0.5 s and stops the route context, which goes stale after route_stale_sec
+# 0.5 s; drive cut by 1.25 s and brake by 2.5 s after the dropout.
+name: ${place.tag}_${input.tag}
+description: route or vehicle input lost while driving
+course: ${place.course}
+speed_mps: 8
+start: {route_s: "${place.route_s}", speed_mps: 8}
+duration_s: 10
+world:
+  other_lights: [{lamps: [green]}]
+  dropouts:
+    - {topics: "${input.topics}", start: {at_s: 2.0}, duration_s: 3.0}
+expect:
+  - {check: drive_cut, after: {dropout: 0}, within_s: "${input.cut_s}"}
+  - {check: brake_not_before, after: {dropout: 0}, delay_s: 1.0}
+  - {check: brake_until_stop, after: {dropout: 0}, within_s: "${input.brake_s}"}
+  - {check: launch_after, after: {stop: 1}, max_delay_s: 3.0}
+matrix:
+  place:
+    - {tag: final, course: final, route_s: 190.0}
+    - {tag: qualifying, course: qualifying, route_s: 100.0}
+  input:
+    - {tag: vehicle_state, topics: [vehicle_state], cut_s: 0.75, brake_s: 2.0}
+    - {tag: localization, topics: [localization], cut_s: 1.25, brake_s: 2.5}

@@ -25,6 +25,19 @@ export type CameraFrame = {
   format: string;
 };
 
+export type LaneLine = {
+  type: number;
+  points: Point2[];
+};
+
+export type ObjectBox = {
+  x: number;
+  y: number;
+  yaw: number;
+  length: number;
+  width: number;
+};
+
 export type Histories = {
   speedTarget: TimedValue[];
   speedActual: TimedValue[];
@@ -54,6 +67,10 @@ export type MonitorModel = {
   zonePaths: ZonePath[];
   localPath: Point2[];
   targetPath: Point2[];
+  targetPathSource: string;
+  laneLines: LaneLine[];
+  objects: ObjectBox[];
+  signalPhases?: RosObject;
   trail: Point2[];
   leftImage?: CameraFrame;
   rightImage?: CameraFrame;

@@ -1,0 +1,27 @@
+# Green, then yellow when the front bumper is 5 m from the line (less than the stopping distance
+# at 7-8 m/s), red 3 s later (D18): committed, pass without stopping or braking.
+name: ${ev.tag}_v${speed}
+description: yellow inside the stopping distance passes
+course: ${ev.course}
+speed_mps: ${speed}
+event: ${ev.id}
+start: {distance_before_line_m: "${ev.start}", speed_mps: "${speed}"}
+duration_s: 10
+world:
+  other_lights: [{lamps: [green]}]
+  event_lights:
+    - {lamps: [green]}
+    - {front_gap_le: 5.0, lamps: [yellow]}
+    - {after_s: 3.0, lamps: [red]}
+expect:
+  - {check: stop_count, event: "${ev.id}", count: 0}
+  - {check: brake_count, event: "${ev.id}", count: 0}
+  - {check: passes_line, event: "${ev.id}"}
+matrix:
+  ev:
+    - {tag: F1, course: final, start: 45, id: Z1_SIGNAL_OBEY}
+    - {tag: F2, course: final, start: 45, id: Z2_SIGNAL_OBEY}
+    - {tag: F5, course: final, start: 45, id: Z5_SIGNAL_OBEY}
+    - {tag: Q2, course: qualifying, start: 36, id: Z2_SIGNAL_OBEY}
+    - {tag: Q4, course: qualifying, start: 36, id: Z4_SIGNAL_OBEY}
+  speed: [7, 8]

@@ -1,178 +1,156 @@
 # Route Tracking
 
-전역 waypoint에서 조향·속도·브레이크 명령이 만들어지는 과정이다. 현재값은
-[PARAMETER_BOOK.md](PARAMETER_BOOK.md)를 참고한다.
+전역 waypoint에서 조향·속도·브레이크 명령이 만들어지는 과정이다.
 
 ## 처리 순서
 
 ```text
 /localization/odometry
-  -> 전역경로 진행거리와 차량 기준 18 m 로컬 경로
-  -> PP / Stanley / PP+Stanley / FF+Stanley
-  -> 직선 허용 통로와 조향 제한
-  -> 곡률·미션 속도 중 최솟값
-  -> 가감속 제한과 정지
+  -> 전역경로 진행도와 차량 기준 로컬 경로
+  -> PP+Stanley 조향
+  -> 진행거리 곡선 속도 + 미션 속도 중 최솟값
+  -> 가감속 제한과 계획 정지
   -> /planning/command
 ```
 
 ## 경로 정합
 
-`route_zone_manager_node`는 후륜축 중앙인 `base_footprint`를 전역경로에 투영한다. 주행 중에는
-이전 진행점 주변만 검색해 가까운 반대 방향 차선으로 점프하는 것을 줄인다.
+- `route_zone_manager_node`는 `base_footprint`를 전역경로에 투영한다. 
+- 이전 진행점 주변을 검색해 가까운 반대 방향 차선으로 점프하는 것을 줄인다.
+- 출발 모드는 `start_mode`다. YAML 기본은 `resume`이고 TUI는 `B` 키로 고른 값을 넘긴다(TUI 기본 `from_start`).
+- `from_start`(처음부터): 진행도 확정 전까지 경로 `s=0`부터 위치만으로 정합하고 헤딩은 쓰지 않는다.
+- `from_start`의 검색 끝은 `start_snap_progress_m`(35 m) 또는 직전 진행도 + 검색 범위 중 큰 값이다. 출발점 옆 종점 구간에는 붙지 않는다.
+- `from_start`의 헤딩은 TUI 준비 검사(헤딩오차 45°, 횡오차 3 m)가 따로 확인한다.
+- `resume`(이어서): 경로 전체에서 헤딩을 함께 써서 정합한다. 경로 중간 출발용이다.
+- 10/17 08:50~08:57에 출발 헤딩이 약 180° 뒤집혀 5 m 옆 종점 구간에 정합된 뒤 풀리지 않았다.
 
 | 항목 | 값 |
 |---|---:|
-| 전역 waypoint 간격 | `1.0 m` |
-| 로컬 경로 | 전방 `18.0 m`, 간격 `1.0 m` |
-| 진행점 검색 범위 | `35.0 m` |
-| 최대 경로 정합 거리 | `15.0 m` |
+| waypoint·로컬 경로 간격 | `1.0 m` |
+| 일반 / 장애물 로컬 경로 | `18 / 35 m` |
+| 진행점 검색 범위 | `35 m` |
+| 최대 정합 거리 | `15 m` |
+| 예선 | `597 points`, `596.13 m` (2026-10-25 결승 45 m 연장) |
+| 본선 | `774 points`, `772.39 m` (결승 연장 2026-10-24 15 m + 2026-10-25 30 m) |
 
-차량 뒤 `x < -0.2 m`인 로컬 경로점은 제외한다. 지정 waypoint 제동도
-`base_footprint`가 해당 진행거리에 도달할 때 발생한다.
+- 두 경로는 START `(-66.689, -130.618)`와 FINISH `(-71.284, -128.294)`를 공유하고, 그 뒤로 같은 직선을 두 경로 모두 `45 m` 더 가 같은 점에서 끝난다(`straightening.finish_extension`). 측량한 실제 결승선은 본선 `s=731.93 m`, 예선 `s=555.67 m`다(`PARAMETER_BOOK.md` 경로 절).
+- 직선화 범위와 연결 구간은 각 route YAML의 `straightening`이 기준이다. 
+- 예선 WP `241~303`은 변경 대상에서 제외되어 있다. 
+- 제동점은 기존 waypoint 중에서 선택한다.
+- `brake_trigger_route_s`는 선택한 점의 누적거리와 일치한다.
 
 ## Pure Pursuit
-
-직선 Ld와 강한 코너 Ld 하한은 다음과 같다.
 
 ```text
 straight_Ld = clamp(4.0 + 0.9 * speed, 3.6, 9.5) [m]
 curve_floor = clamp(3.6 + 0.30 * speed, 3.6, straight_Ld) [m]
-```
-
-전방 12 m에서 같은 방향 곡률이 3점 이상 이어지면 코너로 판단한다. 상태는
-`straight -> turn_approach -> turning/chained_turn -> turn_exit` 순서다. 진입 곡률은
-`0.015 1/m`, 해제 곡률은 `0.010 1/m`다.
-
-Ld 원과 경로 선분의 교점을 보간해 목표점 `(x, y)`를 고른다.
-
-```text
-curvature = 2 * y / (x^2 + y^2)
+curvature = 2 * target_y / (target_x² + target_y²)
 steering = atan(wheelbase * curvature)
 ```
 
-`y > 0`은 좌조향, `y < 0`은 우조향이다.
+- 전방 12 m에서 같은 방향 곡률이 3점 이상 이어지면 코너로 분류한다. 
+- 상태는 `straight -> turn_approach -> turning/chained_turn -> turn_exit` 순서다.
 
 ## Stanley
 
-앞차축을 경로에 투영해 헤딩 오차와 CTE를 더한다.
-
 ```text
 heading_term = clamp(heading_gain * heading_error, heading_limit)
-cte_term = clamp(atan(cross_track_gain * front_axle_CTE
-                 / (abs(speed) + softening_speed)), cte_limit)
+cte_term = clamp(atan(cte_gain * front_axle_CTE / (abs(speed) + 3.0)), cte_limit)
 steering = heading_term + cte_term
 ```
 
-| 항목 | 직선 | 강한 코너 |
+| 항목 | 직선 | 코너 |
 |---|---:|---:|
 | heading gain | `0.30` | `0.45` |
 | CTE gain | `0.25` | `0.35` |
-| heading 항 제한 | `0.10 rad` | `0.16 rad` |
-| CTE 항 제한 | `0.05 rad` | `0.07 rad` |
-| 접선 평활 거리 | `8.0 m` | `6.0 m` |
+| heading 제한 | `0.10 rad` | `0.16 rad` |
+| CTE 제한 | `0.05 rad` | `0.07 rad` |
 
-코너에서는 속도와 곡률 강도에 따라 최대 3.5 m 앞의 경로 형상을 반영한다. 실제 조향각을
-예측하는 기능은 아니다.
+## PP+Stanley
 
-## 혼합 제어기
-
-PP+Stanley는 전역경로 형상 단계마다 고정 PP 비율을 사용한다.
+- TUI Case `1·2·4`는 경로 형상 단계별로 아래 혼합비를 쓴다.
+- `decision.launch.py`도 Case `1`과 같은 추종·속도계획을 사용한다.
 
 | 단계 | PP / Stanley |
 |---|---:|
-| `straight` | `0 / 100%` |
-| `turn_approach` | `65 / 35%` |
-| `turning`, `chained_turn` | `35 / 65%` |
-| `turn_exit` | `10 / 90%` |
+| 직선 | `0 / 100%` |
+| 코너 접근 | `65 / 35%` |
+| 회전·연속 회전 | `35 / 65%` |
+| 코너 복귀 | `10 / 90%` |
 
-단계가 바뀌면 혼합비를 최대 `6.0/s`로 이동한다. 순간 CTE로 제어기를 전환하지 않는다.
+- 혼합비는 최대 `6.0/s`로 이동한다. 
+- 순간 CTE로 제어기를 전환하지 않는다.
+- 수동 수집 경로는 등록 시 형상을 분석해 고정 구간표를 만든다.
+- 추종·회피 Case는 등록된 구간표를 사용한다.
 
-FF+Stanley는 전방 경로 곡률로 기본 조향을 만들고 Stanley 보정의 50%를 더한다.
+## 직선 추종
 
-```text
-ff = atan(wheelbase * reference_curvature)
-steering = ff + 0.50 * stanley
-```
-
-## 직선 허용 통로
-
-전역경로 직선에서는 작은 GNSS·횡오차를 모두 추종하지 않는다.
-
-```text
-preview = clamp(speed * 1.2, 4.0, 9.0) [m]
-predicted_error = path_y + preview * sin(path_heading_error)
-```
-
-예상 횡오차 `0.08 m`, 헤딩 `0.8 deg` 안에서는 미세 보정을 제거한다. 각각 `0.25 m`,
-`2 deg`까지 정상 조향을 연속 복구한다. 코너·회피·REJOIN에는 적용하지 않는다.
-
-모든 제어기의 최종 제한은 최대 조향 `25 deg`, 변화율 `60 deg/s`다. 실제 조향속도와
-목표·실제 오차는 진단만 하며 목표각이나 속도를 바꾸지 않는다.
+- 위 표의 직선 이득은 `3 m/s` 이하와 회피 경로에 쓴다. `6 m/s` 이상은 고유진동수 `1.5 rad/s`·감쇠 `0.95`로 속도마다 계산하고, 그 사이는 섞는다.
+- 전역경로 기반 지역경로는 발행 시각 이후 이동한 만큼 옮겨 추종한다(최대 `0.3 s`).
+- 전역경로 직선·`4 m/s` 이상에서 전륜 CTE를 적분해 직진 편향을 지운다(`±1.5 deg`).
+- 조향 명령에는 직진 오프셋과 엔코더 오차 기반 마찰 보상을 더한다.
+- 최종 조향은 `25 deg`로 제한한다. 변화율 `60 deg/s`는 lateral_ctrl이 건다.
+- 파라미터와 근거는 [PARAMETER_BOOK](PARAMETER_BOOK.md)의 직선 추종·조향 보정 절이다.
 
 ## 속도 계획
 
 ```text
-target = min(cruise, curvature, Zone/FSM, avoidance/rejoin)
+target = min(cruise, route_curve_policy, mission, obstacle)
 ```
 
-곡률 강도 `severity`가 0에서 1로 커질수록 코너 속도 상한을 `3.2 m/s`까지 낮춘다.
+- 판단 노드의 중재기가 모든 모듈 상한의 최솟값을 고른다. 정지는 정지점 기계와 입력 상태만 요청한다([Architecture](ARCHITECTURE.md#main_planning_engine-구조)).
 
-```text
-curve_speed = cruise + (min(3.2, cruise) - cruise) * severity
-```
+- 저장된 진행거리 `s`가 route YAML의 곡선 구간에 들어가면 순항속도의 `0.8`을 목표로 한다.
+- 진입 전 목표는 `1.4 m/s²` 감속 포락선으로 연결한다. 
+- local path의 순간 곡률로 순항속도를 다시 제한하지 않는다.
+- 경로가 stale이거나 정합이 무효이거나 다른 코스와 길이가 맞지 않으면 목표속도 상한만 0으로 내린다. 제동 요청은 하지 않고, 제동은 끊김 규칙(1초 뒤)이 맡는다.
 
-| 항목 | 값 |
-|---|---:|
-| 일반 가속 | `1.0 m/s^2` |
-| 일반 감속 | `2.0 m/s^2` |
-| 신호 재출발 | `2.0 m/s^2`, `3.8 m/s`까지 |
+| 코스 | 곡선 구간 `s [m]` |
+|---|---|
+| 예선 | `82~106`, `122~150`, `223~238`, `311~334`, `400~423`, `447~469` |
+| 본선 | `310~345`, `375~398`, `532~549`, `577~594` |
+
+- 일반 가속·감속은 `1.0 / 2.0 m/s²`다. 
+- 신호·3초 정지 후에는 `2.0 m/s²`로 `5.0 m/s`까지 올린 뒤 일반 가속으로 전환한다.
 
 ## 미션 정지
 
-정지가 필요한 Event는 제동 WP 6 m 전부터 `2.0 m/s` 방향으로 감속한다.
+- 제동 WP는 예선 `204/249/296/340`, 본선 `120/165/302/356/454`다(0-based).
+- 예선 정지선→제동 WP는 `13.37/9.69/13.80/10.67 m`이며, 감속 요청은 각각 그 WP 8 m 전이다.
+- 본선 정지선→제동 WP는 `4.24/13.52/13.77/16.22/20.74 m`이며, 정지가 필요한 신호일 때 각 WP 8 m 전부터 감속을 요청한다.
+- 후륜축이 해당 점에 도달할 때 앞범퍼 여유는 보정된 지도 계산상 예선 약 `7.54~11.61 m`, 본선 약 `2.08~18.59 m`다. 정지 완료 후 여유가 아니다.
+- 후륜축-앞범퍼 `1.98 m`, 차폭 `1.18 m`, 도색 폭 `0.35 m`, 경로 정렬을 가정한다.
+- 최종 정차 여유가 아니라 제동 명령 시점부터 앞 모서리가 도색에 닿기까지의 진행거리다.
+- 정확히 WP에서 완전히 정지했다고 가정하면 같은 값이 정차 여유가 된다. 
+
+- Zone 경계는 지도 정지선의 경로 교차점이며 제동 WP와 구분한다. 위치는 [Mission Scenarios](MISSION_SCENARIOS.md)의 그림을 따른다.
+
+- 정지 Event는 제동 waypoint 8 m 전부터 목표속도 `2.0 m/s`를 즉시 요청한다. 제동은 정지거리 지점에서 건다.
 
 ```text
-entry = min(cruise, 2.0)
-d > 6 m:       target = cruise
-0 < d <= 6 m: target = entry + (cruise - entry) * d / 6.0
-d <= 0:       target = 0, brake_engage = true
+d > 8 m:                 cruise
+d <= 8 m:                min(cruise, 2.0), 이 구간만 명령 감속 상한 10.0 m/s²
+정지거리 지점 도달:      speed=0, brake_engage=true
+(d: 후륜축에서 제동 WP까지, 정지거리 지점: 앞범퍼와 정지선 사이 <= d_stop(v) + brake_margin_m)
 ```
 
-실제속도 `0.1 m/s` 이하부터 3초 정지 또는 신호 대기를 시작한다. 신호 진행은 0.4초 연속
-확인 후 재출발한다.
+- 실제속도 `0.1 m/s` 이하부터 정지 시간을 센다. 
+- 재출발은 `brake=false` 상태를 0.8초 유지한 뒤 가속한다. 
+- 일반 추종·코너의 명령 감속 상한은 `2.0 m/s²`로 유지한다. 비정지 OBSTACLE 목표는 `obstacle_decel_mps2=10.0`을 사용한다.
+- 감속 상한 10.0은 속도명령 변화율이며 실차 감속도나 WP에서 2.0 m/s 도달을 보장하지 않는다.
+- 달리는 중의 허용 신호 `COMMITTED`는 정지선 8 m 이내에서 0.4초 연속 확인 후 확정한다. 정지 뒤 허용 신호로 출발하면 거리와 관계없이 그때 확정한다. 상세 조건은 [Mission Scenarios](MISSION_SCENARIOS.md#신호-판단)를 따른다.
+- 제동 시작점(정지거리 지점)부터 브레이크를 요청하는 동안은 조향 목표를 측정 조향각으로 둔다. 실차는 브레이크 요청과 함께 KEYA가 꺼진다. 실제속도 약 `0.278 m/s` 미만에서는 피드백 각도를 유지하며, 정지 후 `0.3 m/s` 이상에서 경로 조향을 재개한다.
 
-| 코스 | 제동 waypoint |
-|---|---|
-| 예선 | `203, 244, 296, 337` |
-| 본선 | `98, 153, 289, 346, 448` |
+## REJOIN·Recovery
 
-8.0 m/s에서 2.0 m/s까지 2.0 m/s²로 낮추는 이론 거리는 약 15 m다. 고속 시험 전에는
-실제 제동거리로 감속 구간과 제동 waypoint를 다시 정한다.
-
-## Fail-safe
-
-| 조건 | 동작 |
-|---|---|
-| 목표 경로·속도 0.35초 초과 | 속도 0, 브레이크 요청 |
-| 경로 2점 미만 또는 confidence 0 | 속도 0, 브레이크 요청 |
-| Route projection 무효 | Recovery 감속·정지 |
-| MANUAL | 자율 구동 대기, 현재 조향 동기화 |
-| E-Stop·AEB | 즉시 정지 요청 |
+- 일반 CTE·헤딩오차 자동 REJOIN은 비활성화되어 있다.
+- MANUAL에서 AUTO 전환 시 전역경로를 직접 추종한다.
+- 회피 경로는 복귀점에서 전역경로로 돌아오고, 그 뒤 전역경로 추종으로 바뀐다.
+- Route 정합이나 차량 상태가 끊기면 RECOVERY가 곧바로 속도 0을 요청하고, 1초 안에 돌아오지 않으면 실제 정지까지 브레이크를 요청한다. 경로는 직전 경로를 낸다. 인지 끊김은 여기에 들지 않는다.
+- 장애물 구간에서 열은 있는데 회피 경로가 하나도 없으면 `1.6 m/s` 이하 fallback 경로로 계속 진행한다.
+- 목표 경로·속도가 0.35초 넘게 stale이거나 경로점이 2개 미만이면 Motion Control이 곧바로 속도 0을 요청하고, 1초 안에 돌아오지 않으면 실제 정지까지 브레이크를 요청한다. 이미 걸린 브레이크는 끊긴 동안만 유지한다.
 
 ## 진단
 
-`/diagnostics`의 `kaiev26_motion_control/adaptive_lookahead`에서 확인한다.
-
-| 값 | 의미 |
-|---|---|
-| `phase`, `lookahead_m` | 경로 단계와 적용 Ld |
-| `preview_curvature_1pm`, `curve_severity` | 코너 형상과 감속 강도 |
-| `curvature_speed_limit_mps` | 곡률 속도 상한 |
-| `stanley_*` | CTE·헤딩·게인·보정항 |
-| `hybrid_*` | 혼합 단계와 PP 비율 |
-| `ff_*` | FF 곡률과 조향 |
-| `straight_corridor_*` | 직선 완화 적용 여부와 비율 |
-| `actual_steering_rate_degps` | 실제 조향속도 추정값, 진단 전용 |
-| `steering_tracking_error_deg` | 목표·실제 조향 차이, 진단 전용 |
-
-라바콘 경로는 별도 [`kaiev26_aeb`](../kaiev26_aeb/README.md)가 추종한다.
+- `/diagnostics`의 `kaiev26_motion_control/adaptive_lookahead`
+- Ld, 곡선 단계, Stanley 항, 혼합비, 직선 적분·지연 보상과 실제 조향오차를 확인한다.

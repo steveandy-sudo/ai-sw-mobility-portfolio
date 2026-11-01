@@ -1,45 +1,48 @@
 """Run one field Decision test case over externally launched localization."""
 
 import os
+from pathlib import Path
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, LogInfo, OpaqueFunction
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
-from launch_ros.parameter_descriptions import ParameterValue
 
+from kaiev26_decision.curve_speed_policy import resolve_curve_speed_scale_override
+from kaiev26_decision.route_capture import load_custom_route, profile_parameters
 
 CASES = {
     1: ("qualifying", "tracking"),
-    2: ("qualifying", "stopline"),
     3: ("qualifying", "all"),
     4: ("final", "tracking"),
-    5: ("final", "stopline"),
     6: ("final", "avoidance"),
     7: ("final", "all"),
-    8: ("steering_step", "steering_step"),
+    13: ("custom", "tracking"),
+    17: ("custom", "avoidance"),
 }
+SIMULATION_CASES = frozenset({3, 6, 7})
 COURSE_DEFAULT_SPEED_MPS = {
-    "qualifying": 3.2,
-    "final": 3.5,
-    "steering_step": 1.0,
+    "qualifying": 4.0,
+    "final": 4.0,
+    "custom": 2.0,
 }
-DEGRADED_SPEED_LIMIT_MPS = 2.5
 
 
 def _nodes(context):
     try:
         case = int(LaunchConfiguration("case").perform(context))
     except ValueError as error:
-        raise RuntimeError("case must be an integer from 1 to 8") from error
+        raise RuntimeError("case must be one of: " + ", ".join(map(str, CASES))) from error
     if case not in CASES:
-        raise RuntimeError("case must be an integer from 1 to 8")
+        raise RuntimeError("case must be one of: " + ", ".join(map(str, CASES)))
 
     course, mode = CASES[case]
     platform = LaunchConfiguration("platform").perform(context).strip().lower()
     if platform not in {"vehicle", "simulation"}:
         raise RuntimeError("platform must be vehicle or simulation")
+    if platform == "simulation" and case not in SIMULATION_CASES:
+        raise RuntimeError("simulation platform supports only cases 3, 6, and 7")
 
     speed_text = LaunchConfiguration("speed_mps").perform(context).strip()
     try:
@@ -64,64 +67,41 @@ def _nodes(context):
         "config",
         "motion_control.yaml",
     )
+    command_topic = LaunchConfiguration("command_topic")
     route_name = (
         "kcity_quali_route.yaml"
         if course == "qualifying"
         else "kcity_final_route.yaml"
     )
     route_config = os.path.join(decision_share, "waypoints", route_name)
+    custom_phases = {}
+    if course == 'custom':
+        route_config = LaunchConfiguration('route_config').perform(context)
+        if not Path(route_config).is_absolute():
+            raise RuntimeError('custom route_config must be an absolute YAML path')
+        custom_phases = profile_parameters(load_custom_route(route_config))
     policy_config = os.path.join(decision_share, "config", f"{course}_policy.yaml")
     landmark_config = os.path.join(
         decision_share, "config", f"{course}_landmarks.yaml"
     )
+    if course == 'custom':
+        landmark_config = ''
+        policy_config = os.path.join(decision_share, 'config', 'midan_test_policy.yaml')
+    start_mode = LaunchConfiguration("start_mode").perform(context).strip().lower()
+    if start_mode not in {"from_start", "resume"}:
+        raise RuntimeError("start_mode must be from_start or resume")
     use_sim_time = platform == "simulation"
     require_readiness = platform == "vehicle"
     command_topic = LaunchConfiguration("command_topic")
-    controller = ParameterValue(
-        LaunchConfiguration("lateral_controller"), value_type=str
-    )
-
-    if mode == "steering_step":
-        return [
-            Node(
-                package="kaiev26_decision",
-                executable="steering_step_test_node",
-                name="kaiev26_steering_step_test",
-                output="screen",
-                parameters=[
-                    {
-                        "command_topic": command_topic,
-                        "constant_speed_mps": speed_mps,
-                        "steering_amplitude_deg": ParameterValue(
-                            LaunchConfiguration("steering_amplitude_deg"),
-                            value_type=float,
-                        ),
-                        "steering_frequency_hz": ParameterValue(
-                            LaunchConfiguration("steering_frequency_hz"),
-                            value_type=float,
-                        ),
-                        "steering_pattern": ParameterValue(
-                            LaunchConfiguration("steering_pattern"),
-                            value_type=str,
-                        ),
-                        "initial_straight_s": ParameterValue(
-                            LaunchConfiguration("steering_initial_straight_s"),
-                            value_type=float,
-                        ),
-                        "wait_for_run_enable": ParameterValue(
-                            LaunchConfiguration("step_wait_for_run_enable"),
-                            value_type=bool,
-                        ),
-                        "use_sim_time": use_sim_time,
-                    }
-                ],
-            ),
-            LogInfo(
-                msg=(
-                    f"Decision test case 8: steering_step, speed={speed_mps:g} m/s"
-                )
-            ),
-        ]
+    try:
+        curve_speed_scale = float(
+            LaunchConfiguration("curve_speed_scale").perform(context)
+        )
+        resolve_curve_speed_scale_override(curve_speed_scale)
+    except ValueError as error:
+        raise RuntimeError(
+            "curve_speed_scale must be -1 (route YAML) or 0 < scale <= 1"
+        ) from error
 
     nodes = []
     if platform == "vehicle":
@@ -133,7 +113,7 @@ def _nodes(context):
                 output="screen",
                 parameters=[
                     {
-                        "allow_midroute_start": True,
+                        "allow_midroute_start": course != 'custom' and start_mode == "resume",
                         "use_sim_time": False,
                     }
                 ],
@@ -145,8 +125,13 @@ def _nodes(context):
         "landmark_config": landmark_config if mode != "tracking" else "",
         "mission_policy_config": policy_config if mode != "tracking" else "",
         "odometry_topic": "/localization/odometry",
+        "start_mode": start_mode,
         "use_sim_time": use_sim_time,
     }
+    if case == 17:
+        # Captured-route avoidance shows approach, bypass, return and speed-up: no finish zone
+        # takes over 20 m early; the finish stop only brakes once the route end is reached.
+        route_parameters["finish_zone_distance_m"] = 0.0
     nodes.append(
         Node(
             package="kaiev26_decision",
@@ -157,54 +142,75 @@ def _nodes(context):
         )
     )
 
-    if mode == "tracking":
+    if mode in {"all", "avoidance"}:
         nodes.append(
             Node(
                 package="kaiev26_decision",
-                executable="constant_route_plan_node",
-                name="kaiev26_constant_route_plan",
+                executable="perception_gateway_node",
+                name="kaiev26_perception_gateway",
                 output="screen",
-                parameters=[
-                    {
-                        "constant_speed_mps": speed_mps,
-                        "require_readiness": require_readiness,
-                        "use_sim_time": use_sim_time,
-                    }
-                ],
+                parameters=[decision_config, {"use_sim_time": use_sim_time,
+                    **({'road_segments_topic': '/decision/midan_unused/road_segments',
+                        'centerline_topic': '/decision/midan_unused/centerline'} if case == 17 else {})}],
             )
         )
-    else:
-        if mode in {"all", "avoidance"}:
+        if course in {"qualifying", "final"}:
+            # Map-wide signal phase estimate. The main planning engine drives on an aligned
+            # estimate of the event's own light; the camera rejects it (signal_schedule.py).
+            # In Gazebo, signal_cycle_offset_sec (the launcher's --signal-cycle-offset) turns
+            # the theta prior on with that mean; on the vehicle the prior is on by default.
+            cycle_offset = LaunchConfiguration("signal_cycle_offset_sec").perform(context).strip()
+            sim_prior = (
+                {"sim_prior_enabled": True, "sim_prior_mean_sec": float(cycle_offset)}
+                if cycle_offset
+                else {}
+            )
             nodes.append(
                 Node(
                     package="kaiev26_decision",
-                    executable="perception_gateway_node",
-                    name="kaiev26_perception_gateway",
+                    executable="signal_phase_tracker_node",
+                    name="kaiev26_signal_phase_tracker",
                     output="screen",
-                    parameters=[decision_config, {"use_sim_time": use_sim_time}],
+                    parameters=[
+                        decision_config,
+                        {
+                            "map_semantics_path": os.path.join(
+                                get_package_share_directory("kaiev26_maps"),
+                                "maps", "kcity", "kcity_course_semantics.yaml",
+                            ),
+                            "mission_policy_config": policy_config,
+                            "use_sim_time": use_sim_time,
+                            **sim_prior,
+                        },
+                    ],
                 )
             )
-        nodes.append(
-            Node(
-                package="kaiev26_decision",
-                executable="main_planning_engine_node",
-                name="kaiev26_main_planning_engine",
-                output="screen",
-                parameters=[
-                    decision_config,
-                    {
-                        "mission_policy_config": policy_config,
-                        "mission_mode": mode,
-                        "base_speed_mps": speed_mps,
-                        "degraded_speed_mps": min(
-                            speed_mps, DEGRADED_SPEED_LIMIT_MPS
-                        ),
-                        "require_readiness": require_readiness,
-                        "use_sim_time": use_sim_time,
-                    },
-                ],
-            )
+    nodes.append(
+        Node(
+            package="kaiev26_decision",
+            executable="main_planning_engine_node",
+            name="kaiev26_main_planning_engine",
+            output="screen",
+            parameters=[
+                decision_config,
+                {
+                    "mission_policy_config": (
+                        "" if mode == "tracking" else policy_config
+                    ),
+                    "mission_mode": mode,
+                    "base_speed_mps": speed_mps,
+                    "route_config": route_config,
+                    "landmark_config": landmark_config if mode != "tracking" else "",
+                    "curve_speed_scale": curve_speed_scale,
+                    "require_readiness": require_readiness,
+                    "use_sim_time": use_sim_time,
+                    # Captured-route avoidance: the finish stop does not slow down 20 m early
+                    # either; it brakes once the rear axle reaches the route end (0.1 m minimum).
+                    **({"finish_approach_distance_m": 0.1} if case == 17 else {}),
+                },
+            ],
         )
+    )
 
     nodes.extend(
         [
@@ -217,8 +223,8 @@ def _nodes(context):
                     motion_config,
                     {
                         "command_topic": command_topic,
-                        "lateral_controller": controller,
                         "use_sim_time": use_sim_time,
+                        **custom_phases,
                     },
                 ],
             ),
@@ -238,8 +244,7 @@ def _nodes(context):
             LogInfo(
                 msg=(
                     f"Decision test case {case}: course={course}, mode={mode}, "
-                    f"speed={'straight_target' if mode == 'tracking' else 'cruise_ceiling'}="
-                    f"{speed_mps:g} m/s"
+                    f"speed=cruise_target={speed_mps:g} m/s, start={start_mode}"
                 )
             ),
         ]
@@ -251,6 +256,7 @@ def generate_launch_description():
     return LaunchDescription(
         [
             DeclareLaunchArgument("case", default_value="1"),
+            DeclareLaunchArgument('route_config', default_value=''),
             DeclareLaunchArgument(
                 "platform",
                 default_value="vehicle",
@@ -260,40 +266,38 @@ def generate_launch_description():
                 "speed_mps",
                 default_value="0.0",
                 description=(
-                    "Tracking speed or mission cruise ceiling in m/s. Use 0 for "
-                    "qualifying=3.2, final=3.5, and steering step=1.0."
+                    "Tracking or mission cruise target in m/s. Use 0 for "
+                    "qualifying=4.0, final=4.0, custom=2.0."
                 ),
             ),
             DeclareLaunchArgument(
-                "lateral_controller",
-                default_value="pure_pursuit",
-                choices=["pure_pursuit", "stanley", "pp_stanley", "ff_stanley"],
+                "start_mode",
+                default_value="resume",
+                choices=["from_start", "resume"],
+                description=(
+                    "from_start: the run starts at the route start; the progress is matched "
+                    "there by position only. resume: heading-aware search over the whole route."
+                ),
+            ),
+            DeclareLaunchArgument(
+                "curve_speed_scale",
+                default_value="-1.0",
+                description=(
+                    "Startup curve speed multiplier: 0 < scale <= 1; "
+                    "-1 keeps route YAML."
+                ),
             ),
             DeclareLaunchArgument(
                 "command_topic", default_value="/planning/command"
             ),
             DeclareLaunchArgument(
-                "steering_amplitude_deg",
-                default_value="3.0",
-                description="Case 8 central-equivalent steering amplitude in degrees.",
-            ),
-            DeclareLaunchArgument(
-                "steering_frequency_hz",
-                default_value="0.25",
-                description="Case 8 direction-plus-center pulse frequency in Hz.",
-            ),
-            DeclareLaunchArgument(
-                "steering_pattern",
-                default_value="RLR",
-                description="Case 8 repeated direction sequence containing only R and L.",
-            ),
-            DeclareLaunchArgument(
-                "steering_initial_straight_s", default_value="3.0"
-            ),
-            DeclareLaunchArgument(
-                "step_wait_for_run_enable",
-                default_value="false",
-                choices=["true", "false"],
+                "signal_cycle_offset_sec",
+                default_value="",
+                description=(
+                    "Gazebo only: the traffic_signal_cycle_offset_sec the simulation runs with "
+                    "(30 for o30). Given, the tracker's theta prior is on with this mean under "
+                    "sim time. Empty keeps the prior off in simulation."
+                ),
             ),
             OpaqueFunction(function=_nodes),
         ]

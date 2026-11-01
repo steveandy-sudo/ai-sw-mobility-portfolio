@@ -8,7 +8,7 @@ from pathlib import Path
 import sys
 from zoneinfo import ZoneInfo
 
-from .exporter import ExportResult, decision_runs, export_run
+from .exporter import ExportResult, decision_runs, export_run, run_start_time
 
 
 DEFAULT_RECORDS_ROOT = Path.home() / "KAI_ws/records"
@@ -36,8 +36,8 @@ def select_runs(selection: list[str], records_root: Path) -> list[Path]:
     if selection == ["latest"]:
         return discovered[-1:] if discovered else []
     if selection == ["today"]:
-        prefix = datetime.now(ZoneInfo("Asia/Seoul")).strftime("%Y%m%d_")
-        return [run for run in discovered if run.name.startswith(prefix)]
+        today = datetime.now(ZoneInfo("Asia/Seoul")).date()
+        return [run for run in discovered if run_start_time(run).date() == today]
     if any(value in {"all", "latest", "today"} for value in selection):
         raise ValueError("latest, today, all은 다른 경로와 함께 사용할 수 없습니다")
     return [Path(value).expanduser() for value in selection]

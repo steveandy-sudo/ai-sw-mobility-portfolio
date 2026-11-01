@@ -1,0 +1,31 @@
+# The same false arrow on red at a held stop, but the aligned "not permitted" estimate goes stale
+# when the arrow appears (signal_phase_stale_sec 0.5 s), so it cannot withhold the launch: the car
+# launches on the reading as before (owner, 2026-10-16: the tracker only blocks while aligned and
+# fresh). Tracker off and a not aligned estimate are in signal_phase_release_as_before.yaml.
+name: ${ev.tag}_${mode.tag}
+description: a go reading at a held stop launches when no aligned fresh phase estimate forbids it
+course: final
+speed_mps: 8
+event: ${ev.id}
+start: {distance_before_line_m: 45, speed_mps: 8}
+duration_s: 20
+world:
+  other_lights: [{lamps: [green]}]
+  event_lights:
+    - {lamps: [red]}
+    - {stopped_for_s: 2.0, lamps: [red, arrow]}
+  event_phases: "${mode.phases}"
+  dropouts: "${mode.dropouts}"
+expect:
+  - {check: stop_count, event: "${ev.id}", count: 1}
+  - {check: launch_after, after: {light: event, step: 1}, max_delay_s: 3.0}
+  - {check: brake_count, event: "${ev.id}", from: {stop: 1, event: "${ev.id}", at: end}, count: 0}
+  - {check: passes_line, event: "${ev.id}"}
+matrix:
+  ev:
+    - {tag: F3, id: Z3_SIGNAL_OBEY}
+    - {tag: F4, id: Z4_SIGNAL_OBEY}
+  mode:
+    - tag: stale
+      phases: [{aligned: true, permitted: false}]
+      dropouts: [{topics: [signal_phases], start: {stopped_for_s: 2.0}}]

@@ -5,26 +5,62 @@ kaiev26_motion_control:
     command_topic: /planning/command
     control_rate_hz: 50.0
     target_stale_sec: 0.35
+    # Stale targets: speed 0 without brake at once, brake after this long, held until stopped.
+    target_stale_brake_delay_sec: 1.0
     # geometry SSOT: kaiev26_description의 wheelbase 설계값
     wheelbase_m: 1.2991017929
     max_steering_rad: 0.4363
-    # 실차 lateral_ctrl의 60 deg/s software 상한
-    steering_rate_limit_radps: 1.0471975512
+    # 조향 보정(2026-10-22, reports 261022_조향액추에이터_모델_직선흔들림). 실차 조향은 적분 없는
+    # 토크 PD라 목표 ±0.85° 마찰띠 안에서 멈추고(좌로 +0.37° 치우침), 차는 엔코더 −0.45°에서
+    # 직진한다(09/19~10/17 자율주행 기록). 명령에 직진 오프셋을 더하고, 엔코더가 목표에 못
+    # 미치면(시작~최대 오차, 완화) 그 쪽으로 속도별 마찰만큼 민다.
+    # 12 m/s 값 0.6 → 0.8(2026-10-23, reports 261023_dev추종기_직선효과검토·261023_dev추종기_보강_개발계획):
+    # 10/23 미단 직선에서 엔코더는 Stanley 출력의 약 80%만 따라갔고 11·13.6 m/s에만 우측 편향이
+    # 남았다. 3·6.5 m/s 값은 그대로라 저속 회피·정지·재출발은 바뀌지 않는다.
+    # 오프셋 −0.82 → −0.52(2026-10-25, reports 261025_정렬후_좌우90도_추종기_재적합): 바퀴 재장착·앞바퀴
+    # 정렬 뒤 K-City 좌·우 90° 3/5/7/10 m/s에서 직선 적분이 +0.17~+0.38°(왼쪽)로 수렴했고, 적분이
+    # 꺼지는 3 m/s는 경로 오른쪽 0.10~0.16 m에 머물렀다(Stanley 환산 +0.25~+0.39°). 그만큼 왼쪽으로 옮긴다.
+    steering_neutral_offset_deg: -0.52
+    steering_friction_speed_mps: [3.0, 6.5, 12.0]
+    steering_friction_comp_deg: [1.0, 0.85, 0.8]
+    steering_error_start_deg: 0.2
+    steering_error_full_deg: 0.5
+    steering_error_ramp_s: 0.1
+    # 0이면 제한하지 않는다. 조향률 60 deg/s는 lateral_ctrl(max_steering_rate_deg_s)이 두 모드 모두에서 건다.
+    steering_rate_limit_radps: 0.0
     # 실제 조향속도는 제어 제한 없이 진단값으로만 사용한다.
     steering_rate_filter_time_constant_s: 0.15
     steering_rate_estimate_limit_radps: 2.0943951024      # 120 deg/s
-    straight_corridor_enabled: true
-    straight_corridor_preview_time_s: 1.2
-    straight_corridor_preview_min_m: 4.0
-    straight_corridor_preview_max_m: 9.0
-    straight_corridor_deadband_m: 0.08
-    straight_corridor_full_m: 0.25
-    straight_heading_deadband_rad: 0.0139626340          # 0.8 deg
-    straight_heading_full_rad: 0.0349065850              # 2.0 deg
-    # pure_pursuit, stanley, pp_stanley, ff_stanley 중 하나를 선택한다.
-    lateral_controller: pure_pursuit
+    # 예선·본선 Decision 경로추종기는 PP+Stanley로 고정한다.
+    # 직선 추종(2026-10-22, reports 261022_경로추종기_속도별_재검토).
+    # - 직선 Stanley 이득을 고유진동수 straight_natural_frequency_radps·감쇠 straight_damping_ratio로
+    #   속도마다 계산(straight_gain_full_speed_mps 이상). 그 아래는 그 속도 값에서
+    #   straight_gain_blend_start_mps까지 고정 이득(stanley_heading_gain·stanley_cross_track_gain)으로
+    #   돌아가 정지·재출발·저속은 고정 이득으로 조향한다. 회피 경로도 고정 이득이다. 곡선 이득은
+    #   그대로 섞는다.
+    # - 경로 지연 보상: 전역경로 기반 지역경로만, 시각 이후 이동만큼(최대 path_latency_max_s) 옮긴다.
+    #   요레이트는 엔코더각에서 직진 엔코더각 straight_encoder_deg를 뺀 값으로 계산한다.
+    # - 직선 적분: 전역경로 직선·straight_integral_min_speed_mps 이상에서 전륜 횡오차를 적분
+    #   (시간상수 straight_integral_time_s, ±straight_integral_limit_deg). 오차가
+    #   straight_integral_max_error_m을 넘거나 그 밖의 구간에서는 유지, 수동에서 0.
+    #   저속 이득·지연 보상 범위·적분 오차 한도는 09/20~10/17 실차 기록 shadow로 정했다
+    #   (reports 261022_개발안추종기_실차기록검증).
+    # 감쇠 0.95 → 1.1(2026-10-23, 같은 보고서): 명령→측위 헤딩 지연 약 0.42 s에서 속도에 반비례해
+    # 줄던 헤딩 이득을 올린다(10 m/s 0.33→0.39, 11 m/s 0.31→0.36, 13.6 m/s 0.25→0.295, 이전 고정 이득 0.30 수준). 모사상
+    # 1.4부터는 지연 +0.08 s에서 발산하므로 1.1에서 멈춘다.
+    straight_natural_frequency_radps: 1.5
+    straight_damping_ratio: 1.1
+    straight_gain_blend_start_mps: 3.0
+    straight_gain_full_speed_mps: 6.0
+    straight_integral_time_s: 4.0
+    straight_integral_limit_deg: 1.5
+    straight_integral_min_speed_mps: 4.0
+    straight_integral_max_error_m: 0.6
+    path_latency_max_s: 0.3
+    # −0.45 → −0.20(2026-10-25, 같은 보고서): 정렬 뒤 수동·추종 10회 요레이트로 맞춘 직진 엔코더각
+    # −0.06~−0.21°, 직선 엔코더 평균 −0.18~−0.27°.
+    straight_encoder_deg: -0.20
     # 09-05 K-City 수동 기록과 09-11 예선 Case 2 Gazebo 3.2/5.0/6.0 m/s 검증값.
-    adaptive_lookahead_enabled: true
     lookahead_base_m: 4.0
     lookahead_gain_s: 0.9
     lookahead_min_m: 3.6
@@ -53,30 +89,33 @@ kaiev26_motion_control:
     # 코너 형상을 조금 앞에서 반영하되 실제 조향 피드백으로 목표를 예측하지 않는다.
     stanley_curve_preview_time_s: 0.18
     stanley_curve_preview_max_m: 3.5
-    # Feedforward + Stanley: 경로 곡률에서 기본 조향을 만들고 Stanley는 작은 오차 보정만 담당한다.
-    ff_stanley_feedback_scale: 0.50
-    ff_curvature_gain: 1.0
-    ff_preview_time_s: 0.20
-    ff_preview_min_m: 2.0
-    ff_preview_max_m: 4.0
-    ff_curvature_sample_half_width_m: 2.0
-    ff_curvature_limit_1pm: 0.20
-    ff_steering_limit_rad: 0.30
     # Hybrid는 전역경로 형상 phase마다 고정 PP 비율을 선택하고 짧게 전환한다.
     hybrid_pp_straight_weight: 0.0
     hybrid_pp_approach_weight: 0.65
     hybrid_pp_turning_weight: 0.35
     hybrid_pp_exit_weight: 0.10
     hybrid_blend_rate_per_s: 6.0
-    # 순항속도는 직선에서 유지하고, 전방 곡률 강도에 따라 코너에서 이 값까지 낮춘다.
-    curvature_speed_planning_enabled: true
-    curvature_speed_min_mps: 3.2
-    max_accel_mps2: 1.0
+    # 회피 경로를 따르는 동안은 PP 비율을 0으로 둔다(전역경로로 돌아오면 위 비율). 10/23 미단 1426:
+    # 드럼 두 열 사이 S에서 PP 전방주시(3.6 m 이상)가 첫 열 옆을 경로보다 0.3 m 안쪽으로 잘랐다.
+    stanley_only_path_source_prefixes: [sequential_bypass, forced_sequential_bypass]
+    # 수집 경로의 구간별 형상 phase(hybrid_route_segment_*)는 launch가 경로 YAML에서 넣는다.
+    hybrid_route_length_m: 0.0
+    route_context_topic: /planning/route_context
+    # 0이면 가속 제한 없음: 목표 속도를 그 주기에 바로 낸다(신호 출발 boost 포함). 감속은 아래 값대로.
+    max_accel_mps2: 0.0
     signal_release_accel_mps2: 2.0
-    signal_release_boost_speed_mps: 3.8
+    signal_release_boost_speed_mps: 5.0
     max_decel_mps2: 2.0
+    # Applies only to STATIC_STOP/TRAFFIC_LIGHT brake-WP PRE_DECEL targets.
+    stop_pre_decel_mps2: 10.0
+    # Applies to non-stop OBSTACLE targets, including curvature/fallback slowdowns.
+    obstacle_decel_mps2: 10.0
     planned_stop_brake_distance_m: 2.0
+    # STM_B brake servo의 nominal 0.7 s release ramp가 끝난 뒤 traction을 시작한다.
+    brake_release_delay_sec: 0.8
     stop_speed_epsilon_mps: 0.05
     stopped_steering_hold_speed_mps: 0.10
+    # Scales steering over the last metres of a planned stop that still has a target speed.
+    # Under brake, keep path tracking above the steerable speed; hold measured steering below it.
     planned_stop_steering_align_distance_m: 2.0
     stop_release_steering_resume_speed_mps: 0.30

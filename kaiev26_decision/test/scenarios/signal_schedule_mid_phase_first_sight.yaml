@@ -1,0 +1,26 @@
+# 10/17 14:57 F2 (143 straight, docs/reports/2026-10-19_signal_event_judgement case 2): the car
+# comes at 10 m/s to a green that has many seconds left, and pv26 reads it with UNKNOWN frames
+# between, so the camera alone never holds green for the 0.4 s confirmation. The aligned
+# estimate turned green well before the approach; the first sight of it at the event is not a
+# change, so the schedule drives at once and the car passes without braking. When the first sight
+# counted as a change the camera decided the first second, and the stopping distance came within
+# it: a hard brake on green.
+# The harness publishes the phase estimate in place of the tracker node.
+name: F2_green_mid_phase_unknown_frames
+description: a green seen first in the middle of its scheduled phase is passed without braking, though pv26 mixes UNKNOWN frames
+course: final
+speed_mps: 10
+event: Z2_SIGNAL_OBEY
+start: {distance_before_line_m: 45, speed_mps: 10}
+duration_s: 12
+world:
+  other_lights: [{lamps: [green]}]
+  event_lights:
+    - {cycle: [{lamps: [green], s: 0.25}, {lamps: [], s: 0.1}]}
+  event_phases:
+    - {aligned: true, permitted: false, until_change_s: 0.5, lamps: [red]}
+    - {at_s: 0.5, aligned: true, permitted: true, until_change_s: 20.0, lamps: [green]}
+expect:
+  - {check: stop_count, event: Z2_SIGNAL_OBEY, count: 0}
+  - {check: brake_count, event: Z2_SIGNAL_OBEY, count: 0}
+  - {check: passes_line, event: Z2_SIGNAL_OBEY}

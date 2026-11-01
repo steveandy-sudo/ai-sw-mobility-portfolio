@@ -1,0 +1,27 @@
+# Stopped at red, then the own light is never seen again (UNKNOWN): hold, and leave when the
+# 110 s UNKNOWN release fires (D5). No phase estimate is published (no tracker) so it cannot
+# release earlier; with it on, an aligned estimate may decide instead (D5). One straight and one
+# arrow event of the final and one qualifying event: each run waits 110 s of simulated time.
+name: ${ev.tag}
+description: UNKNOWN after a red stop releases at 110 s
+course: ${ev.course}
+speed_mps: 8
+event: ${ev.id}
+start: {distance_before_line_m: "${ev.start}", speed_mps: 8}
+duration_s: 128
+world:
+  other_lights: [{lamps: [green]}]
+  event_lights:
+    - {lamps: [red]}
+    - {stopped_for_s: 2.0, unseen: true}
+  event_phases: [{unpublished: true}]
+expect:
+  - {check: stop_count, event: "${ev.id}", count: 1}
+  - {check: brake_held, from: {stop: 1, event: "${ev.id}", plus_s: 0.5}, to: {light: event, step: 1, plus_s: 109.0}}
+  - {check: launch_after, after: {light: event, step: 1}, min_delay_s: 109.5, max_delay_s: 113.0}
+  - {check: passes_line, event: "${ev.id}"}
+matrix:
+  ev:
+    - {tag: F2, course: final, start: 45, id: Z2_SIGNAL_OBEY}
+    - {tag: F3, course: final, start: 45, id: Z3_SIGNAL_OBEY}
+    - {tag: Q4, course: qualifying, start: 36, id: Z4_SIGNAL_OBEY}

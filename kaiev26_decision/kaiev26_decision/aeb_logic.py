@@ -3,13 +3,15 @@ from __future__ import annotations
 from kaiev26_msgs.msg import PerceptionObject, PerceptionObjectArray, VehicleState
 
 from kaiev26_decision.common import INF_DISTANCE, stamp_age_sec
+from kaiev26_decision.obstacle_geometry import ego_box_extents
 
 
 class AEBLogic:
-    """Decision-local emergency braking decision.
+    """Decision-local TTC risk check.
 
-    The result is consumed by the planner and leaves Decision only as
-    ``ActuatorCommand.brake_engage``.
+    Warning only: the planner logs and marks AEB_WARNING when the brake condition is
+    met, but never brakes or stops the car on it (2026-10-16 decision D8). The brake
+    inspection package kaiev26_aeb is separate.
     """
 
     def __init__(
@@ -37,6 +39,10 @@ class AEBLogic:
         self.bypass_emergency_distance_m = bypass_emergency_distance_m
         self.release_clear_ticks = release_clear_ticks
         self.state = "CLEAR"
+        self.clear_ticks = 0
+
+    def suppress(self, state: str = "SUPPRESSED") -> None:
+        self.state = state
         self.clear_ticks = 0
 
     def brake_required(
@@ -106,16 +112,14 @@ class AEBLogic:
         for obj in objects.objects:
             if obj.class_id not in obstacle_classes:
                 continue
-            x = float(obj.pose.position.x)
-            if x < 0.0:
+            extents = ego_box_extents(obj)
+            if extents is None or extents[1] < 0.0:
                 continue
-            lateral_limit = self.obstacle_path_half_width_m + max(
-                0.1, float(obj.size.y) * 0.5
-            )
-            if abs(float(obj.pose.position.y)) > lateral_limit:
+            xmin, _, ymin, ymax = extents
+            if ymin > self.obstacle_path_half_width_m or ymax < -self.obstacle_path_half_width_m:
                 continue
 
-            distance = max(0.0, x - max(0.0, float(obj.size.x) * 0.5))
+            distance = max(0.0, xmin)
             closing_speed = ego_speed - float(obj.twist.linear.x)
             ttc = distance / closing_speed if closing_speed > 0.05 else INF_DISTANCE
             nearest_distance = min(nearest_distance, distance)

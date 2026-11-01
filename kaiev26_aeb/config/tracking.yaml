@@ -7,12 +7,14 @@ cone_pursuit_node:
     lookahead_max_m: 7.0
     max_steering_rad: 0.4363
     steering_rate_radps: 1.0471975512
-    acceleration_mps2: 2.0
+    acceleration_mps2: 1.0
     path_timeout_s: 0.35
     state_timeout_s: 0.25
     red_front_offset_m: 1.98
     red_confirm_frames: 2
     red_gate_match_m: 1.0
+    red_brake_lead_m: 0.0
+    red_tracking_stop_speed_mps: 0.5
     input_wall_timeout_s: 0.75
     control_hz: 50.0
     path_topic: /aeb/center_path
@@ -22,19 +24,19 @@ cone_pursuit_node:
 
 cone_stanley_node:
   ros__parameters:
+    # Gains, correction limits, straight schedule and integral, steering compensation, wheelbase
+    # and max steering come from kaiev26_motion_control/config/motion_control.yaml (the
+    # qualifying/final tracker). Set them there, not here.
     target_speed_kph: 5.0
-    wheelbase_m: 1.2991017929
-    heading_gain: 0.4
-    cross_track_gain: 0.4
-    soft_speed_mps: 2.0
-    max_steering_rad: 0.4363
     steering_rate_radps: 1.0471975512
-    acceleration_mps2: 2.0
+    acceleration_mps2: 1.0
     path_timeout_s: 0.35
     state_timeout_s: 0.25
     red_front_offset_m: 1.98
     red_confirm_frames: 2
     red_gate_match_m: 1.0
+    red_brake_lead_m: 0.0
+    red_tracking_stop_speed_mps: 0.5
     input_wall_timeout_s: 0.75
     control_hz: 50.0
     path_topic: /aeb/center_path

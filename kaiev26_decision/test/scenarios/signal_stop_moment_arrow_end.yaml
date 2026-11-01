@@ -1,0 +1,59 @@
+# 10/17 14:57 F3 (305 left, docs/reports/2026-10-19_signal_event_judgement 1b): a hard brake is
+# latched while the arrow is off, the arrow lights during the brake and stays lit 0.2 s past the
+# stop, then the light goes dark, yellow and red. The permission confirmed during the brake must
+# not launch the car at the stop: the real launch takes 3.2 s to the line, so the turn would be
+# made on red. The car holds and leaves on the next arrow.
+# - schedule: the aligned estimate permits with 0.4 s of it left (the prior on, as on the car);
+#   it is near the change, so the camera decides, and a stopped car does not launch on a
+#   permission ending within launch_min_remaining_sec (signal_schedule.py). In the
+#   arrow_read_1s case the camera reads the arrow 1 s past the stop, long enough for a fresh
+#   0.4 s confirmation, and only this rule holds the car.
+# - camera: no phase estimate (the prior off, as in a sim-time replay). The confirmation of the
+#   approach is dropped when the hard brake ends in the stop (traffic_light_fsm.py), so the
+#   0.2 s of arrow at the stop is too short to launch.
+# The harness publishes the phase estimate in place of the tracker node.
+name: ${ev.tag}
+description: a permission confirmed during a hard brake does not launch the car at the stop when the arrow ends
+course: final
+speed_mps: 8
+event: Z3_SIGNAL_OBEY
+start: {distance_before_line_m: 45, speed_mps: 8}
+duration_s: 30
+world:
+  other_lights: [{lamps: [green]}]
+  event_lights:
+    - {lamps: [green]}
+    - {front_gap_le: 5.0, lamps: [green, arrow]}
+    - {stopped_for_s: "${ev.arrow_s}", lamps: []}
+    - {after_s: 0.1, lamps: [yellow]}
+    - {after_s: 3.0, lamps: [red]}
+    - {after_s: 6.0, lamps: [green, arrow]}
+  event_phases: "${ev.phases}"
+expect:
+  - {check: stop_count, event: Z3_SIGNAL_OBEY, count: 1}
+  - {check: no_motion, from: {stop: 1, event: Z3_SIGNAL_OBEY}, to: {light: event, step: 5}}
+  - {check: launch_after, after: {light: event, step: 5}, min_delay_s: 0.4, max_delay_s: 3.0}
+  - {check: no_red_crossing, event: Z3_SIGNAL_OBEY}
+  - {check: passes_line, event: Z3_SIGNAL_OBEY}
+matrix:
+  ev:
+    - tag: F3_schedule_permission_ends
+      phases:
+        - {aligned: true, permitted: false, until_change_s: 30.0, lamps: [green]}
+        - {front_gap_le: 5.0, aligned: true, permitted: true, until_change_s: 0.4, lamps: [green, arrow]}
+        - {stopped_for_s: 0.2, aligned: true, permitted: false, until_change_s: 3.0, lamps: [yellow]}
+        - {after_s: 3.1, aligned: true, permitted: false, until_change_s: 30.0, lamps: [red]}
+        - {after_s: 6.0, aligned: true, permitted: true, until_change_s: 7.0, lamps: [green, arrow]}
+      arrow_s: 0.2
+    - tag: F3_schedule_permission_ends_arrow_read_1s
+      phases:
+        - {aligned: true, permitted: false, until_change_s: 30.0, lamps: [green]}
+        - {front_gap_le: 5.0, aligned: true, permitted: true, until_change_s: 1.0, lamps: [green, arrow]}
+        - {stopped_for_s: 1.0, aligned: true, permitted: false, until_change_s: 3.0, lamps: [yellow]}
+        - {after_s: 3.1, aligned: true, permitted: false, until_change_s: 30.0, lamps: [red]}
+        - {after_s: 6.0, aligned: true, permitted: true, until_change_s: 7.0, lamps: [green, arrow]}
+      arrow_s: 1.0
+    - tag: F3_camera_arrow_ends
+      arrow_s: 0.2
+      phases:
+        - {unpublished: true}

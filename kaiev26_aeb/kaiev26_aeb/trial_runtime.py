@@ -18,8 +18,9 @@ from sensor_msgs.msg import CameraInfo, CompressedImage, PointCloud2
 from std_msgs.msg import String
 from std_srvs.srv import SetBool
 from tf2_msgs.msg import TFMessage
+from vision_msgs.msg import Detection3DArray
 
-from .trial_profiles import COUNTDOWN_SEC
+from .trial_profiles import COUNTDOWN_SEC, installed_cone_engine_path
 
 
 TOPICS = {
@@ -30,6 +31,7 @@ TOPICS = {
     '/perception/camera/left/source/camera_info': CameraInfo,
     '/perception/camera/right/source/camera_info': CameraInfo,
     '/tf_static': TFMessage,
+    '/perception/cone/detections': Detection3DArray,
     '/aeb/status': String,
     '/aeb/center_path': PathMessage,
     '/aeb/red_gate': PoseArray,
@@ -62,6 +64,15 @@ STATE_LABELS = {
 BUSY_STATES = {
     'STARTING', 'WAIT_AUTO', 'COUNTDOWN', 'ENABLING', 'RUNNING', 'STOPPING',
 }
+PIPELINE_ISSUE_TIMEOUT_S = 1.0
+TARGET_LOSS_TIMEOUT_S = 2.0
+TARGET_LOSS_ISSUE_PREFIX = '추종 목표점 부족:'
+
+
+def pipeline_issue_timeout(issues):
+    if issues and all(issue.startswith(TARGET_LOSS_ISSUE_PREFIX) for issue in issues):
+        return TARGET_LOSS_TIMEOUT_S
+    return PIPELINE_ISSUE_TIMEOUT_S
 
 
 class TrialNode(Node):
@@ -85,6 +96,7 @@ class TrialNode(Node):
         self.phase_started = self.clock()
         self.auto_seen = False
         self.invalid_since = None
+        self.recorder_warned = False
         self.stop_deadline = None
         self.manager_stop_requested = False
         self.terminal_target = 'COMPLETE'
@@ -185,8 +197,7 @@ class TrialNode(Node):
     @staticmethod
     def external_required(settings):
         topics = list(BASE_EXTERNAL_REQUIRED)
-        if settings.profile.perception == 'fusion':
-            topics.insert(1, '/ouster/points')
+        topics.insert(1, '/ouster/points')
         return tuple(topics)
 
     def command_flow_issue(self, active):
@@ -213,8 +224,10 @@ class TrialNode(Node):
         missing = self.availability(settings)
         if missing:
             issues.append('미구현 launch: ' + ', '.join(missing))
-        if not Path(settings.model_path).is_file():
-            issues.append('YOLO 모델 파일 없음: ' + settings.model_path)
+        if installed_cone_engine_path() is None:
+            issues.append('cone_perception TensorRT engine 미설치')
+        if self.get_publishers_info_by_topic('/perception/cone/detections'):
+            issues.append('기존 cone_perception 실행 중: 중복 인지 발행자')
         for topic in self.external_required(settings):
             issue = self._topic_issue(topic, now)
             if issue:
@@ -227,7 +240,9 @@ class TrialNode(Node):
             issues.append(graph)
         return issues
 
-    def pipeline_issues(self, now=None):
+    def pipeline_issues(self, now=None, recorder=True):
+        """recorder: count a lost MCAP subscription as an issue (before AUTO only; once the
+        countdown starts it is logged, never a reason to stop the run)."""
         now = self.clock() if now is None else now
         issues = []
         for topic in self.external_required(self.settings):
@@ -245,16 +260,28 @@ class TrialNode(Node):
             issue = self._topic_issue(topic, now, timeout=0.8)
             if issue:
                 issues.append(issue)
+        issue = self._topic_issue('/perception/cone/detections', now, timeout=0.8)
+        if issue:
+            issues.append(issue)
         perception = self.json_status.get('/aeb/status', {})
         if not perception.get('valid', False):
             issues.append('인지 경로: ' + str(perception.get('reason', '준비 대기')))
         path = self.received.get('/aeb/center_path')
         if path and len(path[1].poses) < 2:
             issues.append('중앙 경로점 부족')
+        tracking = self.json_status.get('/aeb/tracking_status', {})
+        if tracking.get('enabled') and tracking.get('command_held'):
+            issues.append(TARGET_LOSS_ISSUE_PREFIX + ' ' + str(tracking.get('reason', 'unknown')))
         if not self.enable_client.service_is_ready():
             issues.append('추종 활성화 서비스 대기')
         if not self.graph_scan['recorder_connected']:
-            issues.append('MCAP 필수 토픽 구독 대기')
+            if recorder:
+                issues.append('MCAP 필수 토픽 구독 대기')
+            elif not self.recorder_warned:
+                self.recorder_warned = True
+                self.log('MCAP 필수 토픽 구독 끊김 · 주행은 계속')
+        elif not recorder:
+            self.recorder_warned = False
         return issues
 
     def _call_enabled(self, enabled):
@@ -306,8 +333,9 @@ class TrialNode(Node):
                 self.countdown = None
                 self.auto_seen = False
                 self.invalid_since = None
+                self.recorder_warned = False
                 self.manager_stop_requested = False
-                for topic in ('/aeb/status', '/aeb/center_path', '/aeb/red_gate',
+                for topic in ('/perception/cone/detections', '/aeb/status', '/aeb/center_path', '/aeb/red_gate',
                               '/aeb/tracking_status', '/planning/command'):
                     self.received.pop(topic, None)
                     self.json_status.pop(topic, None)
@@ -361,7 +389,7 @@ class TrialNode(Node):
                     self.phase_started = now
                     self.log('AUTO 확인 · 5초 후 출발')
             if self.state == 'COUNTDOWN':
-                issues = self.pipeline_issues(now)
+                issues = self.pipeline_issues(now, recorder=False)
                 if issues:
                     self._begin_stop('출발 취소: ' + '; '.join(issues), 'ERROR')
                 else:
@@ -372,11 +400,11 @@ class TrialNode(Node):
                         self.countdown = None
                         self._call_enabled(True)
             if self.state == 'RUNNING':
-                issues = self.pipeline_issues(now)
+                issues = self.pipeline_issues(now, recorder=False)
                 if issues:
                     if self.invalid_since is None:
                         self.invalid_since = now
-                    elif now - self.invalid_since >= 1.0:
+                    elif now - self.invalid_since >= pipeline_issue_timeout(issues):
                         self._begin_stop('주행 입력 단절: ' + '; '.join(issues), 'ERROR')
                 else:
                     self.invalid_since = None
@@ -390,11 +418,11 @@ class TrialNode(Node):
         now = self.clock() if now is None else now
         rows = []
         missing = self.availability(settings)
-        rows.append(('시나리오 구현', not missing,
+        rows.append(('Case 구현', not missing,
                      '실행 가능' if not missing else '미구현: ' + ', '.join(missing)))
-        model_ok = Path(settings.model_path).is_file()
-        rows.append(('YOLO 모델', model_ok,
-                     settings.model_path if model_ok else '파일 없음: ' + settings.model_path))
+        engine = installed_cone_engine_path()
+        rows.append(('TensorRT 엔진', engine is not None,
+                     str(engine) if engine else 'cone_perception 엔진 미설치'))
         for topic in self.external_required(settings):
             issue = self._topic_issue(topic, now)
             rows.append((topic, not issue, issue or '정상'))

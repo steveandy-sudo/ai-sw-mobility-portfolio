@@ -1,0 +1,44 @@
+# Final mission 8: two rows of three touching drums 6 m apart, one against each lane edge
+# (Gazebo obstacle_rows of kcity_gazebo_spawn_points.yaml: first row centre on the lane centre at
+# route s 656.0, lane centre +0.09 m left of the route, rows 1.225 m left or right of it, the
+# outer drum touching the painted line).
+# Layout 1: first row left, second right. Layout 2: the other way round.
+# Expected (D10, D11, D13): at most 3 m/s in the zone (route s 639.8-669.8 m) without braking for
+# it until the rear axle leaves the zone (cap_to: front bumper 671.8 m, rear axle at the zone end).
+# Past the zone end the cap ends once the bypass is finished (rear axle 3 m past the last row, path
+# within 0.5 m of the route), not at the return point; then the course speed again before the
+# finish braking. No contact, each row passed on its open side,
+# centre-line side at most 0.5 m past the lane limit, curb side not at all, back on the route before
+# the finish, finish stop held.
+name: layout${layout.n}_${brake.tag}
+description: obstacle zone two-row zigzag
+course: final
+speed_mps: 10
+event: Z6_FINISH
+start: {route_s: 600.0, speed_mps: 5}
+vehicle: {brake_decel_mps2: "${brake.decel}"}
+duration_s: 70
+world:
+  other_lights: [{lamps: [green]}]
+  obstacle_rows: "${layout.rows}"
+expect:
+  - {check: min_obstacle_clearance, min_m: 0.0}
+  - {check: obstacle_pass_side}
+  - {check: lane_departure, s_range: [645, 675], left_max_m: 0.5, right_max_m: 0.0}
+  - {check: max_speed, front_s_range: [641, "${layout.cap_to}"], max_mps: 3.05}
+  - {check: speed_reached, front_s_range: [685, 705], min_mps: 5.0}
+  - {check: no_brake_while_moving, allow_events: [Z6_FINISH]}
+  - {check: route_offset, s_range: [695, 720], max_m: 0.5}
+  - {check: finish_hold, front_past_m: [0, null]}
+  - {check: finish_reported_once}
+matrix:
+  layout:
+    - n: 1
+      cap_to: 671.8
+      rows: [{route_s: 656.03, center_lateral_m: 1.315}, {route_s: 662.03, center_lateral_m: -1.135}]
+    - n: 2
+      cap_to: 671.8
+      rows: [{route_s: 656.03, center_lateral_m: -1.135}, {route_s: 662.03, center_lateral_m: 1.315}]
+  brake:
+    - {tag: b39, decel: 3.9}
+    - {tag: b77, decel: 7.7}

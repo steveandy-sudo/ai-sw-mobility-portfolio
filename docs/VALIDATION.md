@@ -1,34 +1,23 @@
 # Collection validation
 
-Source: `TeamKAI-DL/Decision`, branch `hwj`, commit `11cb96570c5cb8b303f0ca673378e5293f76a181`.
+Source: `TeamKAI-DL/Decision`, branch `kgm`, commit `203cd6ff024486171ac4cd97bdf82afacd1f6c73`.
 
 ## Completed checks
 
 | Check | Result |
 | --- | --- |
-| Imported Git blobs | 144 files collected with byte-preserving source mapping |
-| Python syntax | 81 files parsed successfully |
+| Source file hashes | All 206 imported files match their source Git blobs and SHA-256 entries |
+| Python syntax | 113 files parsed successfully |
 | ROS package XML | 4 manifests parsed successfully |
-| Existing offline AEB tests | 29 passed |
-| Local links in added documentation | 58 file and directory targets verified |
+| Existing offline tests | 33 passed |
+| Curated Markdown links | Relative file and directory targets checked |
 
-The offline run used Python 3.12 on Windows with NumPy, pytest 9.1.1 and PyYAML 6.0.3. Dependencies were installed in an isolated local check directory; source code was not altered to make the tests pass.
+The offline test run used Python on Windows with NumPy and pytest. The checks exercised existing tests against the collected source.
 
-Imported source formatting is retained byte-for-byte, including existing trailing spaces in upstream Markdown. Whitespace checks for the newly authored documents pass.
+## Existing offline tests
 
-Test files:
+- [Pure Pursuit](../kaiev26_aeb/test/test_pursuit.py): lookahead geometry, steering limits, stale or invalid inputs, and a kinematic tracking exercise.
+- [Input-loss latch](../kaiev26_motion_control/test/test_input_loss.py): input loss, latching, and the speed conditions for release.
+- [Visualization trail](../kaiev26_decision_fox/test/test_trail.py): sampling, point limits, and trail reset.
 
-- `kaiev26_aeb/test/test_pursuit.py`
-- `kaiev26_aeb/test/test_trial_profiles.py`
-- `kaiev26_aeb/test/test_package_layout.py`
-
-Coverage includes Pure Pursuit geometry, invalid/stale input braking, a kinematic tracking exercise, the scenario matrix and package/parameter layout. The test's 30 km/h input is a synthetic controller test condition, not a measured vehicle speed.
-
-## Scope of collection checks
-
-- ROS 2 message-dependent tests and full `colcon build`/`colcon test`.
-- Foxglove extension build and live bridge integration.
-- Gazebo integration with the external vehicle workspace.
-- Reproduction of vehicle trials with the matching full team workspace and hardware. The September 19–20 venue-practice outcomes are recorded separately in [EXPERIMENTS.md](EXPERIMENTS.md).
-
-No vehicle or hardware interface was started during collection. Reported project experiments are documented separately in [EXPERIMENTS.md](EXPERIMENTS.md).
+The checks cover source integrity, syntax, and the ROS-independent logic above. ROS node, Foxglove bridge, Gazebo, and vehicle operation use the matching [team workspace](PORTFOLIO_SETUP.md). Competition outcomes and driving experiments are recorded separately in [EXPERIMENTS.md](EXPERIMENTS.md).
