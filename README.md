@@ -11,7 +11,7 @@ Team K.A.I. completed all required missions in both the preliminary and final ro
 
 | Period | Team | My role |
 | --- | --- | --- |
-| March–October 2026 | 27 members; decision-making subteam of 5 | FSM design, tracking-control implementation, driving-log analysis, and vehicle operation |
+| March–October 2026 | 25 members; decision-making subteam of 5 | FSM design, tracking-control implementation, driving-log analysis, and vehicle operation |
 
 [Project portfolio](https://steveandy-sudo.github.io/projects/ai-sw-mobility/) · [Experiment record](docs/EXPERIMENTS.md) · [Setup](docs/PORTFOLIO_SETUP.md)
 
