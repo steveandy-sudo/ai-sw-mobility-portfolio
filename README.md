@@ -19,11 +19,11 @@ Team K.A.I. completed all required missions in both the preliminary and final ro
 
 - Designed FSM states and transition conditions with teammates for traffic lights, timed stops, obstacle avoidance, and mission completion.
 - Recorded GNSS route waypoints while driving and conducted trials using GNSS/IMU-based localization.
-- Analyzed perception outputs, FSM transitions, planned paths, and vehicle feedback in Foxglove. Reviewed timestamps and coordinate frames, then discussed corrections with teammates.
-- Operated the vehicle during Test Week experimental runs and obstacle-avoidance field tests. The avoidance tests covered approach deceleration, collision-free passage, route return, and acceleration afterward.
+- Collected vehicle logs and reproduced a cached-path coordinate and timestamp mismatch in Foxglove. Implemented odometry-based reprojection and kept the saved timestamp when pose history was unavailable (`b71f307`).
+- Temporarily extended the local planning horizon from 35 to 45 m while retaining the 12 m return target (`2eb64af`). Operated follow-up vehicle tests after revising the planning logic.
 - Presented a Pure Pursuit–Stanley hybrid strategy at a Hyundai Mobis-sponsored symposium, then wrote and revised the ROS 2 implementation. The presentation with Woojin Hwang received the Hyundai Mobis Technical Special Award, Autonomous Driving Division, in the name of Team K.A.I.
 
-Both competition courses reached up to **11 m/s (39.6 km/h) during venue practice**. An initial comparison on matched Gazebo segments at **6 m/s** showed approximately **14% lower heading-error p95** and **10% lower steering-command total variation** with hybrid tracking than with Stanley alone. These figures describe the initial simulation comparison; the competition outcome is the mission completion and awards above.
+Both competition courses reached up to **11 m/s (39.6 km/h) during venue practice**. The [experiment record](docs/EXPERIMENTS.md) documents field observations, offline comparisons, team retest notes, and the status of the Gazebo comparison. The [validation record](docs/VALIDATION.md) identifies the scope of the 90 team-branch regression checks and the 33 public-snapshot offline tests.
 
 ## Software structure
 

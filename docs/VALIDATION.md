@@ -9,10 +9,12 @@ Source: `TeamKAI-DL/Decision`, branch `kgm`, commit `203cd6ff024486171ac4cd97bdf
 | Source file hashes | All 206 imported files match their source Git blobs and SHA-256 entries |
 | Python syntax | 113 files parsed successfully |
 | ROS package XML | 4 manifests parsed successfully |
-| Existing offline tests | 33 passed |
+| Existing offline tests on the imported snapshot | 33 passed |
 | Curated Markdown links | Relative file and directory targets checked |
 
 The offline test run used Python on Windows with NumPy and pytest. The checks exercised existing tests against the collected source.
+
+The historical team-branch run recorded 90 passing checks at the time of `2eb64af`, comprising 83 obstacle-sequence tests and seven local-horizon configuration tests. The 33 checks below cover the imported `kgm` snapshot and the listed ROS-independent test modules.
 
 ## Existing offline tests
 
